@@ -634,7 +634,16 @@ impl Game<'_> {
             }
             Slot::Ender(i) => match self.ender_items.get_mut(*i) {
                 Some(slot) => {
-                    *slot = stack;
+                    *slot = stack.clone();
+                    // An open ender chest menu shows a copy, which closing copies back
+                    // over `ender_items`: the write goes into the copy as well.
+                    if let Some(key) = self.ender_open
+                        && let Some(BlockEntity::Chest(items)) =
+                            self.world.block_entities.get_mut(&key)
+                        && let Some(open) = items.get_mut(*i)
+                    {
+                        *open = stack;
+                    }
                     true
                 }
                 None => false,

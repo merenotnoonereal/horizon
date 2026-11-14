@@ -26,6 +26,7 @@ horizon-client game::mods::tests::native_content_follows_the_build_and_misplaced
 horizon-client game::mounts::tests::feeding_a_mount_draws_from_its_own_random_and_posts_eat lib daily game-boot
 horizon-client game::native_block_entity_transform_tests::structure_transform_placement_rotations_mirrors_unset_and_refusal lib daily child-process
 horizon-client game::native_datafix_tests::a_mods_host_upgrades_old_data_and_refuses_by_name lib daily game-boot
+horizon-client game::native_entity_commands::tests::player_command_returns_permission_failures_and_success_without_swallowing_chat lib daily resources
 horizon-client game::native_entity_selectors::tests::nearest_teammate_filters_before_limit_and_drops_false_and_panicking_candidates lib daily game-boot
 horizon-client game::native_entity_selectors::tests::synced_selector_tokens_survive_client_registry_refresh lib daily game-boot
 horizon-client game::native_hooks::player_bed_leave::player_bed_leave_tests::a_listener_waking_the_player_again_is_told_once lib daily game-boot

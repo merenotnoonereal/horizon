@@ -180,17 +180,16 @@ mod tests {
                     let before = game.guest_packets.len();
                     // A surrounding command's output must stay separate from this run.
                     game.chat_capture = Some(vec![Text::literal("outer command")]);
-                    let result = player.entity().run_command_with_output(
-                        game,
-                        "/gamemode creative",
-                        level,
-                    );
+                    let result =
+                        player
+                            .entity()
+                            .run_command_with_output(game, "/gamemode creative", level);
                     assert_eq!(result.success, permission == 2);
                     if permission == 0 {
                         assert_eq!(
                             result.feedback,
                             [
-                                "Unknown or incomplete command, see below for error",
+                                "Unknown or incomplete command. See below for error",
                                 "gamemode creative<--[HERE]",
                             ]
                         );

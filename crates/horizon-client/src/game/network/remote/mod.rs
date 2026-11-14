@@ -5519,18 +5519,7 @@ impl Game<'_> {
                 self.clock.set_frozen(p.frozen);
             }
             C::TickingStep(p) => self.clock.set_frozen_ticks_to_run(p.steps),
-            C::UpdateAdvancements(p) => {
-                let icons = p
-                    .added
-                    .iter()
-                    .map(|a| {
-                        a.display
-                            .as_ref()
-                            .map_or_else(String::new, |d| self.item_name(d.icon.item).to_string())
-                    })
-                    .collect();
-                self.remote_advancements(p, icons);
-            }
+            C::UpdateAdvancements(p) => self.remote_advancements(p),
             // handleAwardStats: StatsCounter.setValue for each.
             C::AwardStats(p) => {
                 let Some(r) = self.remote.as_ref() else {

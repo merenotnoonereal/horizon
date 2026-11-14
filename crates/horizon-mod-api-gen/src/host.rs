@@ -838,7 +838,7 @@ fn handle_method(
         )
     } else {
         return Err(format!(
-            "{name}: a {receiver} helper returns Option, bool or Result, the value a host without a backend refuses"
+            "{name}: a {receiver} helper returns Option, bool, CommandResult or Result, the value a host without a backend refuses"
         ));
     };
     Ok(Some((
@@ -1191,6 +1191,17 @@ mod tests {
             .unwrap();
         assert!(code.contains("host : & mut dyn ClientHost"));
         assert!(code.contains("client_backend_mut_of(host)"));
+        // A command result refuses with an unsuccessful run and no feedback.
+        let command = entry(
+            "fn entity_run_command_with_output(&mut self, entity: EntityRef, line: &str, level: PermissionLevel) -> CommandResult;",
+        );
+        let (handle, code) = handle_method(&command, Tier::BackendMut, &handles)
+            .unwrap()
+            .unwrap();
+        assert_eq!(handle, "EntityRef");
+        assert!(code.contains(
+            "backend_mut_of(host).map(|backend| backend.entity_run_command_with_output(self, line, level)).unwrap_or_default()"
+        ));
         // A `Result` method refuses with its error's `NoBackend` value on a host without a game.
         let tried = entry("fn level_attempt(&mut self, level: LevelRef) -> Result<u8, Refused>;");
         let (_, code) = handle_method(&tried, Tier::BackendMut, &handles)
@@ -1234,7 +1245,7 @@ mod tests {
             (
                 "fn entity_x(&self, entity: EntityRef);",
                 Tier::Backend,
-                "returns Option, bool or Result",
+                "returns Option, bool, CommandResult or Result",
             ),
             (
                 "fn entity_x(&mut self, entity: EntityRef) -> bool;",

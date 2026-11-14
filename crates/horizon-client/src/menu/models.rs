@@ -37,17 +37,39 @@ pub struct StackedOutcome {
     /// The clicked slot after a cancelled, handled click.
     pub clicked: Option<Option<ItemStack>>,
 }
+/// Who and where a `menu_slot_rules` ask is about: the player whose menu it is, the menu's
+/// block, the container the asked slot indexes, and the menu's own containers' slots as they
+/// stand when the click plans (read only, borrowed; the player's inventory slots are not in
+/// it). None where the menu has no such thing: a client's prediction knows no other player,
+/// and a menu opened with no block has no `pos`. `snapshot` is the click plan's one copy for
+/// the parts (see [`super::SlotSnapshot`]); a context without one copies per ask.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct SlotContext<'a> {
+    pub player: Option<u128>,
+    pub pos: Option<[i32; 3]>,
+    pub container: mod_api::MenuContainer,
+    pub slots: &'a [Option<ItemStack>],
+    /// A flattened LAN container stores grid/result values in Main's unused positions.
+    /// These positions are empty in the prediction's separate Main container.
+    pub main_crafting: Option<crate::containers::ModCrafting>,
+    pub grid: &'a [Option<ItemStack>],
+    pub result: &'a [Option<ItemStack>],
+    pub snapshot: Option<&'a super::SlotSnapshot>,
+}
+
 /// `menu_slot_rules` inside a menu click, which cannot reach the game: the game lends the menu
 /// one for the click. A click asks it once for each slot and stack it consults.
 pub trait SlotRules {
     /// Whether a part answers the menu type `menu`; a menu type none answers is never asked.
     fn listens(&self, menu: &str) -> bool;
     /// The slot's own answers arrive in `may_place` and `max_stack`; the parts may change them.
+    /// `context` is who and where the ask is about (see [`SlotContext`]).
     fn rule(
         &self,
         menu: &str,
         slot: usize,
         stack: &ItemStack,
+        context: SlotContext<'_>,
         may_place: &mut bool,
         max_stack: &mut u32,
     );
@@ -171,7 +193,30 @@ struct RuleAnswer {
     slot: usize,
     stack: ItemStack,
     question: (bool, u32),
+    context: ContextKey,
     answer: (bool, u32),
+}
+
+/// The parts of a [`SlotContext`] that can change during one click: an answer is reused only
+/// where they are the same, so a rule that reads the grid is asked again once the grid changed.
+/// The player and the block stay the same for one click.
+#[derive(PartialEq)]
+struct ContextKey {
+    container: mod_api::MenuContainer,
+    slots: Vec<Option<ItemStack>>,
+    grid: Vec<Option<ItemStack>>,
+    result: Vec<Option<ItemStack>>,
+}
+
+impl ContextKey {
+    fn of(context: &SlotContext<'_>) -> Self {
+        Self {
+            container: context.container,
+            slots: context.slots.to_vec(),
+            grid: context.grid.to_vec(),
+            result: context.result.to_vec(),
+        }
+    }
 }
 
 impl RuleAnswers {
@@ -189,12 +234,17 @@ impl RuleAnswers {
         slot: usize,
         stack: &ItemStack,
         question: (bool, u32),
+        context: &ContextKey,
     ) -> Option<(bool, u32)> {
         self.answers
             .borrow()
             .iter()
             .find(|a| {
-                a.slot == slot && a.menu == menu && a.question == question && a.stack == *stack
+                a.slot == slot
+                    && a.menu == menu
+                    && a.question == question
+                    && a.stack == *stack
+                    && a.context == *context
             })
             .map(|a| a.answer)
     }
@@ -215,16 +265,18 @@ impl SlotRules for PlanningRules<'_> {
         menu: &str,
         slot: usize,
         stack: &ItemStack,
+        context: SlotContext<'_>,
         may_place: &mut bool,
         max_stack: &mut u32,
     ) {
         let question = (*may_place, *max_stack);
-        if let Some(found) = self.answers.find(menu, slot, stack, question) {
+        let key = ContextKey::of(&context);
+        if let Some(found) = self.answers.find(menu, slot, stack, question, &key) {
             (*may_place, *max_stack) = found;
             return;
         }
         if let Some(rules) = self.rules {
-            rules.rule(menu, slot, stack, may_place, max_stack);
+            rules.rule(menu, slot, stack, context, may_place, max_stack);
         }
         self.answers.asked.set(self.answers.asked.get() + 1);
         self.answers.answers.borrow_mut().push(RuleAnswer {
@@ -232,6 +284,7 @@ impl SlotRules for PlanningRules<'_> {
             slot,
             stack: stack.clone(),
             question,
+            context: key,
             answer: (*may_place, *max_stack),
         });
     }
@@ -250,10 +303,15 @@ impl SlotRules for StoredRules<'_> {
         menu: &str,
         slot: usize,
         stack: &ItemStack,
+        context: SlotContext<'_>,
         may_place: &mut bool,
         max_stack: &mut u32,
     ) {
-        match self.0.find(menu, slot, stack, (*may_place, *max_stack)) {
+        let key = ContextKey::of(&context);
+        match self
+            .0
+            .find(menu, slot, stack, (*may_place, *max_stack), &key)
+        {
             Some(found) => (*may_place, *max_stack) = found,
             None => self.0.missed.set(self.0.missed.get() + 1),
         }

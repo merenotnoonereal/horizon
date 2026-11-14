@@ -3571,22 +3571,6 @@ pub(super) fn living_flags(using: Option<(usize, u32)>, spinning: bool) -> i8 {
         | if spinning { 4 } else { 0 }
 }
 
-/// The name a mod hears for an equipment slot (the armor stand hook's names, plus
-/// the two slots a mount's gear uses).
-fn equipment_slot_name(slot: horizon_core::equipment_slot::EquipmentSlot) -> &'static str {
-    use horizon_core::equipment_slot::EquipmentSlot;
-    match slot {
-        EquipmentSlot::MainHand => "mainhand",
-        EquipmentSlot::OffHand => "offhand",
-        EquipmentSlot::Head => "head",
-        EquipmentSlot::Chest => "chest",
-        EquipmentSlot::Legs => "legs",
-        EquipmentSlot::Feet => "feet",
-        EquipmentSlot::Body => "body",
-        EquipmentSlot::Saddle => "saddle",
-    }
-}
-
 #[cfg(test)]
 use level_event_targets::level_event_except;
 
@@ -3646,7 +3630,7 @@ impl Game<'_> {
 
 #[cfg(test)]
 mod tests {
-    use super::{EventTimings, OFFHAND_SLOT, equipment_slot_name, living_flags, mob_freeze_meta};
+    use super::{EventTimings, OFFHAND_SLOT, living_flags, mob_freeze_meta};
 
     #[test]
     fn a_burst_of_short_events_still_has_a_slow_tick_note() {
@@ -4512,21 +4496,6 @@ mod tests {
         assert_eq!(super::level_event_except(1500, actor, false), None);
         assert_eq!(super::level_event_except(2001, actor, false), actor);
         assert_eq!(super::level_event_except(2001, actor, true), None);
-    }
-
-    /// The names a mod matches on for a broken item's slot (a contract).
-    #[test]
-    fn a_broken_items_slot_is_named_for_mods() {
-        use horizon_core::equipment_slot::EquipmentSlot::*;
-        let named: Vec<_> = [MainHand, OffHand, Head, Chest, Legs, Feet, Body, Saddle]
-            .map(equipment_slot_name)
-            .to_vec();
-        assert_eq!(
-            named,
-            [
-                "mainhand", "offhand", "head", "chest", "legs", "feet", "body", "saddle"
-            ]
-        );
     }
 
     /// `server_chat`'s replies reach the sender alone, as system chat, whether

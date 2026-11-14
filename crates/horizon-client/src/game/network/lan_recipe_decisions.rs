@@ -506,7 +506,9 @@ impl Game<'_> {
                     *slot = stack;
                 }
             }
-            _ => return,
+            // The plan read these positions, and Epoch::All refused the action if any journaled
+            // write changed them since: a skip here would leave the staged inputs in two places.
+            _ => unreachable!("a planned recipe source is still a container"),
         }
         self.container_changed(pos);
     }

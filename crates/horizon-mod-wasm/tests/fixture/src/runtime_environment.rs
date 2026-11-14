@@ -25,6 +25,9 @@ pub fn started(host: &dyn ServerHost) {
     // retaining the first reply across a second imported call.
     let game = host.game_version();
     let horizon = host.horizon_version();
+    let data_version = host.server_data_version();
+    assert_eq!(data_version, 5023);
+    assert_eq!(data_version, host.server_data_version());
     assert_eq!(game, host.game_version());
     assert_eq!(horizon, host.horizon_version());
     assert_eq!(registered.dist(), host.dist());

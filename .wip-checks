@@ -1,0 +1,3 @@
+clippy --workspace --all-targets -- -D warnings
+test -p horizon-mod-vocab
+test -p horizon-client --lib -- data_version

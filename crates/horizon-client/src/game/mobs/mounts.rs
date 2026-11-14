@@ -6,6 +6,7 @@ use super::Game;
 use horizon_client::actions::Action;
 use horizon_client::{
     blocks::Fluid,
+    first_person::Hand,
     hud::HudBatch,
     items::ItemStack,
     mobs::{Mob, MobEvent, Species, Who, equine},

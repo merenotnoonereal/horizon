@@ -199,10 +199,23 @@ impl Game<'_> {
 /// Fire the hook with the frozen stacks and validate what it answers. The answer is kept for the
 /// click; a bad one refuses it.
 fn fire(game: &mut Game<'_>, shared: &Shared<'_>) -> Reply {
-    let frozen = &shared.frozen;
+    match fire_frozen(game, &shared.frozen) {
+        Ok(answer) => {
+            *shared.answer.borrow_mut() = Some(answer);
+            Reply::Allow
+        }
+        Err(reason) => Reply::Invalid(reason),
+    }
+}
+
+/// Ask the existing pickup hook inside an action that already owns the frozen menu.
+pub(super) fn fire_frozen(
+    game: &mut Game<'_>,
+    frozen: &StackedClick,
+) -> std::result::Result<StackedOutcome, InvalidReason> {
     let (Ok(carried), Ok(clicked)) = (frozen.carried.try_into_api(), frozen.clicked.try_into_api())
     else {
-        return Reply::Invalid(InvalidReason::Plan);
+        return Err(InvalidReason::Plan);
     };
     let event = mod_api::item::menu::StackedOnOther::new(
         frozen.player,
@@ -217,13 +230,7 @@ fn fire(game: &mut Game<'_>, shared: &Shared<'_>) -> Reply {
     let mut result = StackedOnOtherResult::default();
     let mut canceled = false;
     game.native_item_stacked_on_other(&event, &mut result, &mut canceled);
-    match answer(game, canceled, &result) {
-        Ok(answer) => {
-            *shared.answer.borrow_mut() = Some(answer);
-            Reply::Allow
-        }
-        Err(reason) => Reply::Invalid(reason),
-    }
+    answer(game, canceled, &result)
 }
 
 /// The typed answer, validated once: a stack may be set only by a cancelled click that is also

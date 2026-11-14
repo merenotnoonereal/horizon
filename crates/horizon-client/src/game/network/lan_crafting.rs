@@ -249,6 +249,12 @@ impl Game<'_> {
         if let Some(maps) = maps {
             self.register_made_maps(maps);
         }
+        self.settle_guest_menu(gi, menu)?;
+        Some(result)
+    }
+
+    /// Store a frozen menu's player state and drain its existing take/drop notices once.
+    pub(super) fn settle_guest_menu(&mut self, gi: usize, menu: &mut Menu) -> Option<()> {
         // A taken anvil result waits for AnvilCraftEvent.Pre: what the click
         // dropped waits with it (lan_station_op throws it or refuses the take).
         let dropped = if menu.anvil_craft.is_some() {
@@ -303,7 +309,7 @@ impl Game<'_> {
             });
         }
         self.drop_guest_items(gi, dropped);
-        Some(result)
+        Some(())
     }
 
     /// `InventoryMenu.slotsChanged` for guest `uuid`'s crafting grid written outside a click
@@ -407,7 +413,7 @@ impl Game<'_> {
     /// blaze powder slots) or a content mod's menu type (`Kind::Mod`) over the
     /// block entity's slots. False for other windows.
     pub(super) fn lan_machine_click(&mut self, conn: u32, p: &play::ContainerClick) -> bool {
-        let Some(host) = self.lan.as_mut() else {
+        let Some(host) = self.lan.as_ref() else {
             return false;
         };
         let Some(gi) = host.hub.guests.iter().position(|g| g.conn == conn) else {
@@ -471,9 +477,21 @@ impl Game<'_> {
         if host.hub.guests[gi].spectator() {
             // handleContainerClick: nothing changes, and sendAllDataToRemote
             // takes back what the client predicted.
-            host.hub.resend_menu(conn, p.container, &self.world);
+            self.lan
+                .as_mut()
+                .unwrap()
+                .hub
+                .resend_menu(conn, p.container, &self.world);
             return true;
         }
+        if mod_type.is_some_and(|t| {
+            t.crafting
+                .is_some_and(|c| i32::from(p.slot) == c.result as i32)
+        }) && self.recipe_listened(gi, p.container, false)
+        {
+            return self.lan_mod_recipe_click(gi, p);
+        }
+        let host = self.lan.as_mut().unwrap();
         let mut menu = host
             .menus
             .entry(conn)
@@ -1034,6 +1052,7 @@ impl Game<'_> {
         menu.set_registry_id(Some("minecraft:crafting"));
         *host.menus.entry(conn).or_default().crafting.table = Some((window, 0, menu, pos));
         self.lan_send_table_content(conn);
+        self.player_menu_opening(conn);
     }
 
     /// A click on the guest's crafting table window; false for other windows.
@@ -1474,7 +1493,18 @@ impl Game<'_> {
     }
 
     pub(super) fn lan_crafting_closed(&mut self, conn: u32, window: Option<i32>) -> bool {
-        self.lan_crafting_removed(conn, window, MenuRemoval::Live)
+        let closed = self.lan_crafting_removed(conn, window, MenuRemoval::Live);
+        if closed && window != Some(0) {
+            if let Some(gi) = self
+                .lan
+                .as_ref()
+                .and_then(|host| host.hub.guests.iter().position(|g| g.conn == conn))
+            {
+                self.guest_carried_back(gi);
+            }
+            self.player_menu_closing(conn);
+        }
+        closed
     }
 
     /// Remove only input slots; disconnected players drop their inputs.
@@ -2179,7 +2209,7 @@ mod empty_ingredient_placement_tests {
                 &[],
             );
             game.world_tables = game
-                .build_world_tables(&stack, false, &resources, false)
+                .stage_world_tables(&stack, false, &resources)
                 .unwrap()
                 .0;
             game.build_registries();

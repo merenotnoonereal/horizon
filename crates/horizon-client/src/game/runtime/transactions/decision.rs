@@ -22,7 +22,7 @@ pub(in crate::game) use menu_owner::{MenuOwner, OwnerStamp};
 #[path = "decision_engine.rs"]
 pub(in crate::game) mod engine;
 #[cfg(test)]
-pub(in crate::game) use storage::{APPLIED, DECIDED};
+pub(in crate::game) use storage::APPLIED;
 pub(in crate::game) use storage::{ActionHost, GameHost};
 pub(super) use storage::{ActiveAction, Journal};
 

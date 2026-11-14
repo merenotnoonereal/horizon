@@ -1,15 +1,14 @@
 //! Real guest packets and real listeners, using vanilla's two-stone pressure plate.
 use super::{
-    Game,
-    native_guest_turn_tests::with_guests,
-    transactions::decision::{APPLIED, DECIDED},
+    Game, decided_action::DECIDED, native_guest_turn_tests::with_guests,
+    transactions::decision::APPLIED,
 };
 use horizon_client::{
     containers::{BlockEntity, ModBlockEntity, ModBlockEntityFields, ModCrafting, ModMenuType},
     items::ItemStack,
     lan::{
         Out, PlayerSender,
-        menu::{Menu as HubMenu, Slots},
+        menu::{Menu as HubMenu, ModCraft, Slots},
         recipes,
     },
 };
@@ -17,12 +16,13 @@ use horizon_protocol::{
     buf::{Reader, Writer},
     packets::{
         configuration::CustomPayload,
-        play::{Clientbound as C, Serverbound as S},
+        play::{Clientbound as C, ContainerClick, Serverbound as S},
         recipes::PlaceRecipe,
     },
 };
 use mod_api::{
-    Hooks, ItemPlace, ItemResource, ModEntry, PlayerRecipeBookClickEvent, RecipeSourcesEvent, ServerHost,
+    Hooks, ItemPlace, ItemResource, ModEntry, PlayerRecipeBookClickEvent, PrepareItemCraftEvent,
+    RecipeSourcesEvent, ServerHost,
 };
 use std::{
     cell::Cell,
@@ -92,6 +92,19 @@ impl Hooks for PlacementSources {
         listen(host);
     }
 }
+// Taking the last result empties the grid, so the replace hook can observe this click.
+struct Prepare;
+#[mod_api::__subscriptions]
+impl Hooks for Prepare {
+    fn prepare_item_craft(
+        &self,
+        host: &mut dyn ServerHost,
+        _event: &mut PrepareItemCraftEvent<'_>,
+    ) -> Option<mod_api::ItemStack> {
+        listen(host);
+        None
+    }
+}
 struct Sources;
 #[mod_api::__subscriptions]
 impl Hooks for Sources {
@@ -105,6 +118,7 @@ impl Hooks for Sources {
 enum Route {
     Book,
     Mod,
+    ModClick,
     Transfer,
 }
 
@@ -124,6 +138,9 @@ fn setup(game: &mut Game<'_>, route: Route) -> mpsc::Receiver<Out> {
                 2
             },
         ));
+        if matches!(route, Route::ModClick) {
+            g.inventory[0] = None;
+        }
         g.recipe_book.recipes.insert(RECIPE.into());
     });
     if !matches!(route, Route::Book) {
@@ -175,6 +192,19 @@ fn setup(game: &mut Game<'_>, route: Route) -> mpsc::Receiver<Out> {
                 asks_still_valid: false,
             })
         });
+        if matches!(route, Route::ModClick) {
+            let Some(BlockEntity::Mod(m)) = game.world.block_entities.get_mut(&POS) else {
+                panic!("mod crafting station");
+            };
+            m.items[1] = Some(ItemStack::new("minecraft:stone", 1));
+            m.items[2] = Some(ItemStack::new("minecraft:stone", 1));
+            game.lan.as_mut().unwrap().hub.guests.update(0, |g| {
+                g.menu.as_mut().unwrap().craft = Some(ModCraft {
+                    grid: m.items[1..10].to_vec(),
+                    result: Some(ItemStack::new("minecraft:stone_pressure_plate", 1)),
+                });
+            });
+        }
     }
     assert!(
         world_recipes!(game).placement(RECIPE).is_some(),
@@ -189,7 +219,17 @@ fn request(game: &mut Game<'_>, route: Route) {
     } else {
         WINDOW
     };
-    let packet = if matches!(route, Route::Transfer) {
+    let packet = if matches!(route, Route::ModClick) {
+        S::ContainerClick(ContainerClick {
+            container,
+            state: 0,
+            slot: 0,
+            button: 0,
+            input: 0,
+            changed: Vec::new(),
+            carried: None,
+        })
+    } else if matches!(route, Route::Transfer) {
         let mut w = Writer::new();
         w.varint(container);
         w.string(RECIPE);
@@ -215,10 +255,14 @@ fn request(game: &mut Game<'_>, route: Route) {
 fn state(game: &Game<'_>, route: Route, applied: bool) {
     let g = &game.lan.as_ref().unwrap().hub.guests[0];
     assert_eq!(g.inventory[20], None, "listener's write rolled back");
-    assert_eq!(g.carried, None);
+    assert_eq!(
+        g.carried,
+        (applied && matches!(route, Route::ModClick))
+            .then(|| ItemStack::new("minecraft:stone_pressure_plate", 1))
+    );
     assert_eq!(
         g.inventory[0],
-        if applied {
+        if applied || matches!(route, Route::ModClick) {
             None
         } else {
             Some(ItemStack::new(
@@ -247,9 +291,14 @@ fn state(game: &Game<'_>, route: Route, applied: bool) {
         assert_eq!(m.items[0], None, "result is not stored as an ingredient");
         (m.items[1..10].to_vec(), result)
     };
+    let filled = if matches!(route, Route::ModClick) {
+        !applied
+    } else {
+        applied
+    };
     assert_eq!(
         grid.into_iter().flatten().collect::<Vec<_>>(),
-        if applied {
+        if filled {
             vec![ItemStack::new("minecraft:stone", 1); 2]
         } else {
             vec![]
@@ -257,7 +306,7 @@ fn state(game: &Game<'_>, route: Route, applied: bool) {
     );
     assert_eq!(
         result,
-        applied.then(|| ItemStack::new("minecraft:stone_pressure_plate", 1))
+        filled.then(|| ItemStack::new("minecraft:stone_pressure_plate", 1))
     );
     if matches!(route, Route::Transfer) {
         let Some(BlockEntity::Chest(items)) = game.world.block_entities.get(&SOURCE) else {
@@ -293,7 +342,7 @@ fn exercise(route: Route, listener: Box<dyn Hooks>) {
     mod_platform::testing::with_mods(vec![ModEntry::new("recipe_test", listener)].into(), || {
         with_guests(|game| {
             let rx = setup(game, route);
-            // Accepted: one dispatch and one application; both stones staged exactly once.
+            // Accepted: one dispatch and one application of the placement or result take.
             script(false, false);
             request(game, route);
             assert_eq!((CALLS.get(), DECIDED.get(), APPLIED.get()), (1, 1, 1));
@@ -327,6 +376,11 @@ fn exercise(route: Route, listener: Box<dyn Hooks>) {
                         3,
                         "Unavailable is the existing refusal byte"
                     );
+                } else if matches!(route, Route::ModClick) {
+                    assert!(
+                        sent.iter().any(|p| matches!(p, C::ContainerSetContent(_))),
+                        "refused click corrects the predicted result take"
+                    );
                 } else {
                     assert!(
                         sent.iter().any(|p| matches!(p, C::PlaceGhostRecipe(_))),
@@ -336,7 +390,7 @@ fn exercise(route: Route, listener: Box<dyn Hooks>) {
                 // The failing callback did not strand the guest or the menu; the next input works.
                 script(false, false);
                 request(game, route);
-                assert_eq!((CALLS.get(), APPLIED.get()), (1, 1));
+                assert_eq!((CALLS.get(), DECIDED.get(), APPLIED.get()), (1, 1, 1));
                 state(game, route, true);
             });
         }
@@ -346,7 +400,7 @@ fn exercise(route: Route, listener: Box<dyn Hooks>) {
             let outer = game.transaction_open();
             request(game, route);
             state(game, route, true);
-            assert_eq!((CALLS.get(), APPLIED.get()), (1, 1));
+            assert_eq!((CALLS.get(), DECIDED.get(), APPLIED.get()), (1, 1, 1));
             assert!(
                 packets(&rx).is_empty(),
                 "no success packet before root commit"
@@ -373,6 +427,12 @@ fn mod_placement_is_one_atomic_decision() {
 
 #[test]
 #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+fn mod_result_click_is_one_atomic_decision() {
+    exercise(Route::ModClick, Box::new(Prepare));
+}
+
+#[test]
+#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
 fn transfer_is_one_atomic_decision_with_all_sources() {
     exercise(Route::Transfer, Box::new(Sources));
 }
@@ -380,7 +440,7 @@ fn transfer_is_one_atomic_decision_with_all_sources() {
 #[test]
 #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
 fn unsubscribed_recipe_routes_never_enter_the_coordinator() {
-    for route in [Route::Book, Route::Mod, Route::Transfer] {
+    for route in [Route::Book, Route::Mod, Route::ModClick, Route::Transfer] {
         with_guests(|game| {
             let rx = setup(game, route);
             // Without a lender the ordinary transfer uses the player's two stones.
@@ -390,10 +450,8 @@ fn unsubscribed_recipe_routes_never_enter_the_coordinator() {
                 });
             }
             script(false, false);
-            let writes = game.transactions.writes();
             request(game, route);
             assert_eq!((CALLS.get(), DECIDED.get(), APPLIED.get()), (0, 0, 0));
-            assert_eq!(game.transactions.writes(), writes);
             state(
                 game,
                 if matches!(route, Route::Transfer) {

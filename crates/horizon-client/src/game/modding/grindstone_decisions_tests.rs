@@ -8,8 +8,8 @@ use crate::game::{
 use horizon_client::items::ItemStack;
 use horizon_protocol::packets::play::{ContainerClick, Serverbound};
 use mod_api::{
-    Flow, GrindstonePlaceEvent, GrindstoneTakeEvent, Hooks, ItemPlace, ItemResource, ModEntry, Mods,
-    Registrar, ServerHost,
+    Flow, GrindstonePlaceEvent, GrindstoneTakeEvent, Hooks, ItemPlace, ItemResource, ModEntry,
+    Mods, Registrar, ServerHost,
 };
 use std::cell::{Cell, RefCell};
 
@@ -101,8 +101,12 @@ impl Hooks for Mod {
 fn with_mod(test: impl FnOnce()) {
     let mods: Mods = vec![ModEntry::new("grindmod", Box::new(Mod))].into();
     mod_platform::testing::with_mods(mods, || {
-        assert!(mod_api::__private::listened(mod_api::HookId::GrindstonePlace));
-        assert!(mod_api::__private::listened(mod_api::HookId::GrindstoneTake));
+        assert!(mod_api::__private::listened(
+            mod_api::HookId::GrindstonePlace
+        ));
+        assert!(mod_api::__private::listened(
+            mod_api::HookId::GrindstoneTake
+        ));
         test();
     });
 }
@@ -323,8 +327,12 @@ fn a_panicking_take_listener_leaves_the_grindstone_as_it_was() {
 fn a_grindstone_without_a_listener_keeps_the_vanilla_result() {
     without_mod(|| {
         with_guests(|game| {
-            assert!(!mod_api::__private::listened(mod_api::HookId::GrindstonePlace));
-            assert!(!mod_api::__private::listened(mod_api::HookId::GrindstoneTake));
+            assert!(!mod_api::__private::listened(
+                mod_api::HookId::GrindstonePlace
+            ));
+            assert!(!mod_api::__private::listened(
+                mod_api::HookId::GrindstoneTake
+            ));
             let window = open_grindstone(game);
             let a = enchanted_sword(game, 200);
             let b = enchanted_sword(game, 150);

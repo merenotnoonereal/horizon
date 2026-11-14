@@ -188,8 +188,8 @@ impl Game<'_> {
             let mut undo = None;
             let hook = gs.menu.anvil_hook;
             let mut grind_undo = None;
-            let grind_hook = gs.menu.grind_hook
-                && mod_api::__private::listened(mod_api::HookId::GrindstoneTake);
+            let grind_hook =
+                gs.menu.grind_hook && mod_api::__private::listened(mod_api::HookId::GrindstoneTake);
             self.guest_menu_op_decided(gi, &mut gs.menu, click, None, |menu, env| {
                 undo = hook.then(|| menu.anvil_undo());
                 grind_undo = grind_hook.then(|| menu.grindstone_undo());
@@ -251,13 +251,7 @@ impl Game<'_> {
                         move |game| {
                             let mut take = take;
                             let mut cancel = false;
-                            game.api_grindstone_take(
-                                uuid,
-                                entity_id,
-                                pos,
-                                &mut take,
-                                &mut cancel,
-                            );
+                            game.api_grindstone_take(uuid, entity_id, pos, &mut take, &mut cancel);
                             if !cancel
                                 && (take.xp < -1
                                     || take.new_top.as_ref().is_some_and(|s| s.count < 1)

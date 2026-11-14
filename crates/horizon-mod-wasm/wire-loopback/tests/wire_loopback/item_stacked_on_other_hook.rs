@@ -1,5 +1,3 @@
-use super::*;
-
 pub(super) struct ItemStackedOnOtherHooks;
 impl ItemStackedOnOtherHooks {
     pub(super) fn item_stacked_on_other(

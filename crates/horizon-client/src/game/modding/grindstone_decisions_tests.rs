@@ -25,10 +25,12 @@ struct Script {
 thread_local! {
     static SCRIPT: RefCell<Script> = RefCell::new(Script::default());
     static DISPATCHES: Cell<usize> = const { Cell::new(0) };
+    static TAKE_XP: Cell<Option<i32>> = const { Cell::new(None) };
 }
 
 fn script(script: Script) {
     DISPATCHES.set(0);
+    TAKE_XP.set(None);
     SCRIPT.with(|s| *s.borrow_mut() = script);
 }
 
@@ -84,9 +86,10 @@ impl Hooks for Mod {
     fn grindstone_take(
         &self,
         host: &mut dyn ServerHost,
-        _: &mut GrindstoneTakeEvent,
+        event: &mut GrindstoneTakeEvent,
     ) -> mod_api::Flow {
         DISPATCHES.set(DISPATCHES.get() + 1);
+        TAKE_XP.set(Some(event.take.xp));
         assert!(host.transaction_current().is_some());
         if SCRIPT.with(|s| s.borrow().take_panic) {
             panic!("a listener failed");
@@ -136,7 +139,11 @@ fn open_grindstone(game: &mut crate::game::Game<'_>) -> i32 {
         .unwrap();
     game.world.set(1, 64, 1, state).unwrap();
     assert!(game.lan_open_station(12, &Station::new(StationKind::Grindstone, [1, 64, 1])));
-    assert!(game.guest_menu_still_valid(12));
+    let host = game.lan.as_ref().unwrap();
+    assert!(game.lan_station_valid(
+        &host.hub.guests[0],
+        host.menus[&12].station.as_ref().unwrap(),
+    ));
     game.lan.as_ref().unwrap().menus[&12]
         .station
         .as_ref()
@@ -202,14 +209,11 @@ fn a_place_listener_sets_the_grindstone_result() {
             click(game, window, 0, 0);
             assert_eq!(DISPATCHES.get(), 1);
             assert_eq!(slot(game, 2), Some(ItemStack::new("minecraft:dirt", 1)));
+            click(game, window, 2, 0);
+            assert_eq!(TAKE_XP.get(), Some(5));
             assert_eq!(
-                game.lan.as_ref().unwrap().menus[&12]
-                    .station
-                    .as_ref()
-                    .unwrap()
-                    .menu
-                    .grind_xp,
-                5
+                game.lan.as_ref().unwrap().hub.guests[0].carried,
+                Some(ItemStack::new("minecraft:dirt", 1))
             );
         });
     });

@@ -5,14 +5,14 @@ use horizon_client::{lan::guest::Guest, text::Text};
 
 impl Game<'_> {
     /// Report a normal leave after the hub removed the guest and broadcast its leave line.
-    pub(super) fn native_guest_left(&mut self, guest: &Guest) {
+    pub(in crate::game) fn native_guest_left(&mut self, guest: &Guest) {
         // A fake silently displaced by a real login was never announced as online.
         if guest.is_fake() && !guest.disconnect_pending {
             return;
         }
         // A held player was recorded as joined at its login: it leaves too.
         if self.is_dedicated_server() && (guest.placed || guest.held) {
-            super::dedicated::events::record(
+            crate::game::dedicated::events::record(
                 "leave",
                 &guest.name,
                 guest.uuid,
@@ -20,7 +20,7 @@ impl Game<'_> {
             );
             if guest.held && !guest.placed {
                 // Never announced, so no "left the game" either.
-                super::dedicated::log(
+                crate::game::dedicated::log(
                     "INFO",
                     &horizon_client::lan::arrivals::dropped_line(
                         &guest.name,
@@ -28,7 +28,7 @@ impl Game<'_> {
                     ),
                 );
             } else {
-                super::dedicated::log(
+                crate::game::dedicated::log(
                     "INFO",
                     &format!("{} lost connection: {}", guest.name, guest.left_reason),
                 );
@@ -37,7 +37,7 @@ impl Game<'_> {
             // announced as leaving, so the line is not logged either; a held
             // player was never announced at all.
             if guest.placed && !guest.quiet_leave {
-                super::dedicated::log(
+                crate::game::dedicated::log(
                     "INFO",
                     &format!("System chat: {} left the game", guest.name),
                 );

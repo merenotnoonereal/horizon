@@ -1,8 +1,7 @@
 //! Real guest packets and real listeners, using vanilla's two-stone pressure plate.
 use super::{
-    Game,
-    native_guest_turn_tests::with_guests,
-    transactions::decision::{APPLIED, DECIDED},
+    Game, decided_action::DECIDED, native_guest_turn_tests::with_guests,
+    transactions::decision::APPLIED,
 };
 use horizon_client::{
     containers::{BlockEntity, ModBlockEntity, ModBlockEntityFields, ModCrafting, ModMenuType},

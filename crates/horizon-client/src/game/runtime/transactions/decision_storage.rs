@@ -5,7 +5,7 @@ use horizon_client::join_seq::visibility::PassLease;
 
 #[cfg(test)]
 thread_local! {
-    pub(in crate::game) static DECIDED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    /// How many decided actions applied; `decided_action::DECIDED` counts the entries.
     pub(in crate::game) static APPLIED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
@@ -119,10 +119,6 @@ pub(in crate::game) struct GameHost<'a, 'g> {
 }
 
 impl ActionHost for GameHost<'_, '_> {
-    #[cfg(test)]
-    fn decided(&mut self) {
-        DECIDED.set(DECIDED.get() + 1);
-    }
     #[cfg(test)]
     fn applied(&mut self) {
         APPLIED.set(APPLIED.get() + 1);

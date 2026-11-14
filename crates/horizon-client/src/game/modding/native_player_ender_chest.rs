@@ -51,6 +51,10 @@ impl Game<'_> {
         }
         let mut set = false;
         let ran = self.native_as_player_handle(player, |game| {
+            game.journal_player(player.uuid());
+            if let Some(key) = game.ender_open {
+                game.journal_block_entity(key);
+            }
             if game.ender_items.len() < SLOTS {
                 game.ender_items.resize(SLOTS, None);
             }

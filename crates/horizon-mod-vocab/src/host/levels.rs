@@ -410,6 +410,15 @@ pub trait LevelsBackend {
     /// without a default clock, like the Nether, is None, as is a stale handle and a client.
     #[access(WorldOnly)]
     fn level_clock_time(&self, level: LevelRef) -> Option<i64>;
+    /// Side: server.
+    /// The next clock time after [`level_clock_time`](Self::level_clock_time) at which the
+    /// level's own clock reaches `marker`, a time marker of its timelines (as `/time set <marker>`
+    /// moves to it). Today only the Overworld's clock defines markers, so a level following any
+    /// other clock (a mod dimension's own) answers None for every marker. None too for a marker
+    /// the clock does not define, a time past `i64::MAX`, a level without a default clock, a stale
+    /// handle and a client.
+    #[access(WorldOnly)]
+    fn level_clock_marker_time(&self, level: LevelRef, marker: &Identifier) -> Option<i64>;
     /// Side: both.
     /// `FluidState.getFlow` at `pos`: the current that pushes an entity there, after the
     /// `fluid_flow` hook, as entities feel it. Zero where no fluid flows. None as for
@@ -1245,18 +1254,23 @@ pub trait LevelsBackendMut {
         b: i32,
     ) -> bool;
     /// Side: server.
-    /// Explodes at `center` as `Level.explode(source, x, y, z, radius, fire,
-    /// interaction)` does (`native_explode`), `source` being the exploding
-    /// entity, or none. The causing entity comes from it, never from the
-    /// caller: a primed TNT's owner, a living entity itself, a projectile's
-    /// owner when that is living, else none. With both the damage is
-    /// `minecraft:player_explosion`, else `minecraft:explosion`, and a kill
-    /// credits the causing entity. `interaction` says what happens to blocks
-    /// (`Mob` asks the source's `entity_mob_griefing`, `Trigger` only works
-    /// buttons, levers, doors and the like); `fire` lights some of the air
-    /// around whatever it is. False, with nothing exploded, for a stale
-    /// `source` or one in another level, a chunk that isn't loaded or a
-    /// radius outside `0 < radius <= 32`.
+    /// Explodes at `center` as vanilla's full `Level.explode(source,
+    /// damageSource, calculator, x, y, z, radius, fire, interaction,
+    /// smallParticles, largeParticles, blockParticles, sound)` does
+    /// (`native_explode`), `source` being the exploding entity, or none. The
+    /// causing entity comes from it, never from the caller: a primed TNT's
+    /// owner, a living entity itself, a projectile's owner when that is
+    /// living, else none. With both the damage is
+    /// `minecraft:player_explosion`, else `minecraft:explosion`, unless
+    /// `settings` names a damage type, and a kill credits the causing entity.
+    /// `interaction` says what happens to blocks (`Mob` asks the source's
+    /// `entity_mob_griefing`, `Trigger` only works buttons, levers, doors and
+    /// the like); `fire` lights some of the air around whatever it is.
+    /// `settings` holds the damage calculator, particles and sound, each
+    /// vanilla's default when `None`. There is no radius limit, as in
+    /// vanilla: a big blast costs the blocks its rays find, and one of 0 or
+    /// below finds none. Refused, with nothing exploded and no hook told, as
+    /// [`ExplodeError`] says.
     #[access(WorldOnly)]
     fn level_explode(
         &mut self,
@@ -1266,7 +1280,86 @@ pub trait LevelsBackendMut {
         radius: f32,
         fire: bool,
         interaction: ExplosionInteraction,
-    ) -> bool;
+        settings: ExplosionSettings,
+    ) -> Result<(), ExplodeError>;
+    /// Side: server.
+    /// The resistance the blast `level.explode(host, source, center, radius, fire, interaction)`
+    /// would set off would meet in the cell at `pos`, as its rays read it
+    /// (`ExplosionDamageCalculator.getBlockExplosionResistance`), without exploding anything. The
+    /// larger of the block's answer (its parts' `explosion_resistance` first, then its own value)
+    /// and the fluid's (water and lava 100); `NoResistance` for air with no fluid. The blast's
+    /// calculator is the one `explode` gives that source, read from the same selection: as
+    /// vanilla's `EntityBasedExplosionDamageCalculator` asks the source, a primed TNT minecart's
+    /// rails and the blocks under them resist 0 (and the blast spares them), and a dangerous
+    /// wither skull caps a block it may destroy at 0.8; any other source has the default one.
+    /// A respawn anchor's water cell
+    /// belongs to the anchor's own sourceless blast, which no description names, so no read sees
+    /// it. The causing entity and damage type come from `source` as for `explode`, and parts are
+    /// asked with that `ExplosionStart`. `Unavailable` for a stale level or `source`, a chunk
+    /// that isn't loaded (it is never loaded) or a state the game doesn't know; None only from a
+    /// host without a game. The level does not change.
+    #[access(WorldOnly)]
+    fn level_explosion_resistance(
+        &mut self,
+        level: LevelRef,
+        pos: [i32; 3],
+        source: Option<EntityRef>,
+        center: [f64; 3],
+        radius: f32,
+        fire: bool,
+        interaction: ExplosionInteraction,
+    ) -> Option<ExplosionResistance>;
+    /// Side: server.
+    /// `level_explosion_resistance` for every cell of `cells`, one answer a cell in the order
+    /// `cells` gives them. A state is asked once per call only when every part on its block that
+    /// answers `explosion_resistance` declares the answer pure
+    /// (`BlockPart::explosion_resistance_is_pure`); otherwise its parts are asked once a cell.
+    /// Refused, with nothing read, for an inverted area or more than
+    /// `ResistanceCells::MAX` (262,144) cells: it runs on the server tick, so read big areas in
+    /// pieces.
+    #[access(WorldOnly)]
+    fn level_explosion_resistances(
+        &mut self,
+        level: LevelRef,
+        cells: &ResistanceCells,
+        source: Option<EntityRef>,
+        center: [f64; 3],
+        radius: f32,
+        fire: bool,
+        interaction: ExplosionInteraction,
+    ) -> Result<Vec<ExplosionResistance>, ResistanceCellsError>;
+    /// Side: server.
+    /// Destroys the blocks at `positions` as the blast `level.explode(host, source, center,
+    /// radius, fire, interaction)` would destroy them, without casting its rays, hurting or
+    /// pushing entities, or any packet or sound: a mod that casts its own rays breaks what they
+    /// found with it, spread over ticks if it likes. A Horizon addition. Each call is one
+    /// explosion to the hooks: `explosion_start` first, which may cancel it (then nothing breaks
+    /// and the answer is 0), then, for a radius of at least 0.00001, `explosion_detonate` with
+    /// the positions as its block list, in the order given, a repeated one once; a listener may
+    /// only take positions out (spare them), and one it adds is ignored. Then the block step in
+    /// vanilla's order: the positions shuffled with the level's random, and each block hit as
+    /// the blast hits one (air skipped; `can_drop_from_explosion`; loot with the radius under
+    /// the decay interaction; experience when the causing entity is a player;
+    /// `on_block_exploded`, whose default sets air and primes TNT owned by the causing entity),
+    /// the drops of the whole call merged and popped after the last block; then, with `fire`, a
+    /// third of the cells left air above a solid block catch fire, under `None` too. `None`
+    /// breaks nothing else, and `Trigger` only works the blocks it may. Unlike vanilla's rays, a
+    /// position in a chunk that isn't loaded is skipped, never loaded and not counted, and so is
+    /// one outside the level's height. The number of blocks destroyed: those that were not air
+    /// when their turn came. `Err`, with nothing changed, for more than 65,536 positions
+    /// (`ExplosionDestroyError::MAX_POSITIONS`), a stale level or `source`, or a centre or
+    /// radius that isn't finite or a negative radius.
+    #[access(WorldOnly)]
+    fn level_explosion_destroy_blocks(
+        &mut self,
+        level: LevelRef,
+        positions: &[[i32; 3]],
+        source: Option<EntityRef>,
+        center: [f64; 3],
+        radius: f32,
+        fire: bool,
+        interaction: ExplosionInteraction,
+    ) -> Result<u32, ExplosionDestroyError>;
     /// Side: server.
     /// Strikes lightning at `at`, as summoning a `minecraft:lightning_bolt`
     /// does: it sets fire, hurts and converts what it hits (a pig to a

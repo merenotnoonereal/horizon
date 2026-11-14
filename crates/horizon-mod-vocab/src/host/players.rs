@@ -35,6 +35,16 @@ pub trait PlayersClientHost {
     #[access(WorldOnly)]
     fn push_player(&mut self, kick: [f32; 3]);
     /// Side: client.
+    /// For a client mod: chooses the local player's hotbar slot, `slot` (0 to 8), as
+    /// `Inventory.setSelectedSlot` does for a number key. It sends nothing itself: the game
+    /// sends the carried-item packet at the next tick's start at the latest, and before the
+    /// packets of an attack, a use, an interact, a release, a drop and a continued block break
+    /// (not before a block break start). Refused above 8 with `OutOfRange`, without a client
+    /// world with `NoWorld`, and for a spectator with `Refused` (its number keys open the
+    /// spectator menu), leaving the selection as it was.
+    #[access(WorldOnly)]
+    fn select_hotbar_slot(&mut self, slot: u8) -> Result<(), HotbarSlotError>;
+    /// Side: client.
     /// For a client mod: the local player's collision exclusions, the client half of
     /// `EntityRef::set_collision_exclusions`, with the same boxes, rules and refusals (a client
     /// with no player of its own answers `Stale`). The client moves its player itself, so a mod
@@ -156,7 +166,8 @@ pub trait PlayersBackend {
     #[access(WorldOnly)]
     fn player_dimension(&self, player: PlayerRef) -> Option<Identifier>;
     /// Side: both.
-    /// `Inventory.getSelectedSlot`: the hotbar slot the player holds, 0..9.
+    /// `Inventory.getSelectedSlot`: the hotbar slot the player holds, 0..9. On a client,
+    /// [`crate::ClientHost::select_hotbar_slot`] chooses it.
     #[access(WorldOnly)]
     fn player_selected_slot(&self, player: PlayerRef) -> Option<usize>;
     /// Side: both.
@@ -886,6 +897,9 @@ pub trait PlayersBackendMut {
         input: PlayerInput,
     ) -> Option<SimulatedMove>;
     /// Side: server.
+    /// Numbers: 0..35 main (0..8 hotbar), 36..39 feet to head, 40 offhand,
+    /// 41 body, 42 saddle. ItemPlace uses 100..103 for armour and -106 for offhand;
+    /// InventoryMenu has no 41 or 42.
     /// `Inventory.setItem(slot, stack)` by `player_inventory_slots`' numbers: `stack` (None
     /// empties it) goes into that slot as `/item replace entity <player> <slot>` puts it,
     /// without the slot's item check, so a worn slot takes any item; the equip sound and
@@ -894,7 +908,8 @@ pub trait PlayersBackendMut {
     /// writes nothing and is named by `PlayerDataRefusal`: `Stale` (no online player behind
     /// the handle), `Client`, `Dead`, `SlotOutOfRange` (a slot past 42, never a panic) and
     /// `Stack` (an item the world lacks, a count or damage the item does not allow).
-    /// Applied at once: an abort of the open transaction does not undo it.
+    /// An open transaction journals this write; an abort restores the previous value.
+    /// Equipment effects wait for the outermost commit.
     #[access(WorldOnly)]
     fn player_set_inventory_slot(
         &mut self,
@@ -907,7 +922,7 @@ pub trait PlayersBackendMut {
     /// chest slot `slot` (0 to 26). A player looking into their ender chest is sent the slot
     /// with the open menu's sync. Refuses as `player_set_inventory_slot` does, with
     /// `SlotOutOfRange { last: 26 }` for a slot past 26 (never a panic).
-    /// Applied at once: an abort of the open transaction does not undo it.
+    /// An open transaction journals this write; an abort restores the previous value.
     #[access(WorldOnly)]
     fn player_set_ender_chest_slot(
         &mut self,
@@ -921,7 +936,8 @@ pub trait PlayersBackendMut {
     /// the player's eyes with no pickup delay and only they may pick it up; a stack that went
     /// in whole plays the pickup sound. Refuses, with nothing given, with `Stale`, `Client`,
     /// `Dead` or `Stack`, as `player_set_inventory_slot` does.
-    /// Applied at once: an abort of the open transaction does not undo it.
+    /// An open transaction journals this write; an abort restores the previous value.
+    /// Overflow drops and pickup sounds wait for the outermost commit.
     #[access(WorldOnly)]
     fn player_give_stack(
         &mut self,
@@ -938,7 +954,7 @@ pub trait PlayersBackendMut {
     /// teleports keep the whole compound. For ports: new mods use attachments. Refuses,
     /// writing nothing: `Stale`, `Client`, `Dead`, and `TooDeep` for data that would sit 512
     /// levels deep or more in the player's file.
-    /// Applied at once: an abort of the open transaction does not undo it.
+    /// An open transaction journals this write; an abort restores the previous value.
     #[access(WorldOnly)]
     fn player_set_persistent_data(
         &mut self,

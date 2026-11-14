@@ -220,7 +220,7 @@ impl Default for WorldClock {
         }
     }
 }
-/// A clock time marker from the timelines (ClockTimeMarker).
+/// A clock time marker from the timelines (ClockTimeMarker); `resolve` is None past `i64::MAX`.
 #[derive(Clone, Copy, Debug)]
 pub struct TimeMarker {
     pub ticks: i64,
@@ -234,13 +234,13 @@ impl TimeMarker {
             None => self.ticks == total,
         }
     }
-    pub fn resolve(&self, total: i64) -> i64 {
+    pub fn resolve(&self, total: i64) -> Option<i64> {
         match self.period {
             Some(p) => {
                 let d = self.ticks - total.rem_euclid(p);
-                total + if d > 0 { d } else { p + d }
+                total.checked_add(if d > 0 { d } else { p + d })
             }
-            None => self.ticks,
+            None => Some(self.ticks),
         }
     }
 }
@@ -518,7 +518,8 @@ fn resource_ids(root: &Path) -> Arc<ResourceIds> {
         recipes: json_ids_of_every_namespace(root, "recipe"),
         templates: templates_under(&root.join("worldgen/structure")),
         entity_types,
-        enchantments: json_ids_in(&data.join("enchantment")),
+        // A content mod's enchantments too (`/enchant`, `/give` components).
+        enchantments: json_ids_of_every_namespace(root, "enchantment"),
         structures: json_ids_in(&data.join("worldgen/structure")),
         biomes: json_ids_in(&data.join("worldgen/biome")),
         clocks: json_ids_in(&data.join("world_clock")),

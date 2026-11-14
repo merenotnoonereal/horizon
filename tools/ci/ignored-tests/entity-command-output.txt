@@ -1,0 +1,2 @@
+# Command-source feedback regression for #4304; boots a game with prepared resources.
+horizon-client game::native_entity_commands::tests::player_command_returns_permission_failures_and_success_without_swallowing_chat lib daily resources

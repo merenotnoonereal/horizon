@@ -90,10 +90,11 @@ impl Hooks for Prepare {
     fn prepare_item_craft(
         &self,
         host: &mut dyn ServerHost,
-        event: &mut PrepareItemCraftEvent<'_>,
+        _event: &mut PrepareItemCraftEvent<'_>,
     ) -> Option<mod_api::ItemStack> {
         listen(host);
-        event.result.clone()
+        let key = mod_api::__private::item_key("minecraft:stone_pressure_plate").unwrap();
+        Some(mod_api::ItemStack::new(key, 1).unwrap())
     }
 }
 struct Sources;

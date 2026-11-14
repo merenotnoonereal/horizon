@@ -45,7 +45,7 @@ jobs:
             if [ $rc -ne 0 ]; then
               fail=1
               echo "## FAILED: cargo $line" >> checks.txt
-              grep -E '^(error|warning)(\[|:)|^ *--> |^ *= (note|help)|panicked at|assertion|left:|right:|FAILED|test result' "out-$i.log" | head -n 80 >> checks.txt
+              grep -v -E 'missing `\[lints\]`|\(manifest\) generated|missing_lints_inheritance|/Cargo.toml$' "out-$i.log" | grep -E '^(error|warning)(\[|:)|^ *--> |^ *= (note|help)|panicked at|assertion|left:|right:|FAILED|test result' | head -n 80 >> checks.txt
               echo >> checks.txt
             else
               echo "## ok: cargo $line" >> checks.txt

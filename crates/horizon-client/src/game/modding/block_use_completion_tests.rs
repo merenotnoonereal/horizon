@@ -629,7 +629,7 @@ fn block_use_nested_originals_and_replacements_are_isolated() {
                 ItemStack::new("minecraft:glowstone", 4)
             ]
         );
-        assert!(g.block_use_original.is_empty());
+        assert!(g.item_use_stacks.block_originals.is_empty());
     });
 }
 

@@ -215,6 +215,7 @@ impl Game<'_> {
                 self.armor[index] = updated;
                 if let Some(stack) = broken {
                     self.player_equipment_broke(armor_slot(index), &stack);
+                    self.player_item_destroyed(&before, None);
                     self.award_stat("broken", &stack.item, 1);
                     self.apply_equipment();
                 }
@@ -261,6 +262,7 @@ impl Game<'_> {
         });
         if let Some(broken) = broken {
             self.player_equipment_broke(break_slot, &broken);
+            self.player_item_destroyed(&stack, Some(self.hand));
         }
     }
     /// `ItemStack.hurtWithoutBreaking`: Unbreaking applies, but the stack stops at

@@ -6,6 +6,7 @@ use super::Game;
 use horizon_client::actions::Action;
 use horizon_client::{
     blocks::Fluid,
+    first_person::Hand,
     hud::HudBatch,
     items::ItemStack,
     mobs::{Mob, MobEvent, Species, Who, equine},
@@ -264,6 +265,7 @@ impl Game<'_> {
                     let mut rod = stack.transmute("minecraft:fishing_rod", 1);
                     rod.damage = 0;
                     self.inventory[self.selected] = Some(rod);
+                    self.player_item_destroyed(&stack, Some(Hand::Main));
                 }
             }
         }

@@ -104,12 +104,12 @@ impl Game<'_> {
             .as_ref()
             .cloned()
             .unwrap_or_else(|| ItemStack::new(TOTEM, 1));
-        if let Some(s) = cell.as_mut() {
-            s.count -= 1;
-            if s.count == 0 {
-                *cell = None;
-            }
-        }
+        let slot = if main {
+            self.selected
+        } else {
+            super::shield::OFFHAND_SLOT
+        };
+        self.consume_player_slot(slot, 1);
         self.award_stat("used", &protector.item, 1);
         self.trigger_item("minecraft:used_totem", &protector);
         // ItemStack.causeUseVibration: the totem's use effects make one.

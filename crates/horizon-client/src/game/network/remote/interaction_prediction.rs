@@ -4,7 +4,7 @@ impl Game<'_> {
     /// `Minecraft.startUseItem`'s entity turn for `hand`: Interact goes to
     /// the server, and whether the click ends there is what this client's
     /// copy of the entity answers (`MultiPlayerGameMode.interact`).
-    pub(super) fn remote_use_entity(&mut self, hand: Hand) -> bool {
+    pub(in crate::game) fn remote_use_entity_inner(&mut self, hand: Hand) -> bool {
         // A menu this use opens (a chest minecart's) is no clicked block's.
         if let Some(r) = self.remote.as_mut() {
             r.use_target = None;
@@ -151,7 +151,7 @@ impl Game<'_> {
     }
     /// MultiPlayerGameMode.useItemOn for `hand`: whether the click ends there
     /// (the block reacts, or a block item is placed).
-    pub(super) fn remote_use_item_on(&mut self, hand: Hand) -> bool {
+    pub(in crate::game) fn remote_use_item_on_inner(&mut self, hand: Hand) -> bool {
         let held = self.with_hand(hand, |g| g.held().cloned());
         let held_block = held
             .as_ref()

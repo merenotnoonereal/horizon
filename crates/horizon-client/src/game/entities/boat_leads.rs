@@ -526,12 +526,7 @@ impl Game<'_> {
                 });
                 self.lead_sound("tied", at);
                 // The lead is always used up.
-                if let Some(stack) = self.held_mut().as_mut() {
-                    stack.count -= 1;
-                    if stack.count == 0 {
-                        *self.held_mut() = None;
-                    }
-                }
+                self.consume_player_slot(self.held_slot(), 1);
                 return true;
             }
         }

@@ -889,6 +889,7 @@ impl Game<'_> {
                 if let Some(ref broken) = broken {
                     self.award_stat("broken", &broken.item, 1);
                     self.player_equipment_broke(world_equipment_slot(slot), broken);
+                    self.player_item_destroyed(&stack, None);
                 }
                 return broken;
             }
@@ -901,6 +902,12 @@ impl Game<'_> {
         if let Some(ref broken) = broken {
             self.award_stat("broken", &broken.item, 1);
             self.player_equipment_broke(world_equipment_slot(slot), broken);
+            let hand = match slot {
+                EquipmentSlot::MainHand => Some(Hand::Main),
+                EquipmentSlot::OffHand => Some(Hand::Off),
+                _ => None,
+            };
+            self.player_item_destroyed(&stack, hand);
             if armor_index(slot).is_some() {
                 self.apply_equipment();
             }

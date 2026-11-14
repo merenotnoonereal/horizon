@@ -21,10 +21,10 @@ impl Game<'_> {
         action: impl FnOnce(&mut Self) -> R,
     ) -> R {
         let original = self.with_hand(hand, |g| g.held().cloned());
-        let depth = self.block_use_original.len();
-        self.block_use_original.push((hand, original));
+        let depth = self.item_use_stacks.block_originals.len();
+        self.item_use_stacks.block_originals.push((hand, original));
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| action(self)));
-        self.block_use_original.truncate(depth);
+        self.item_use_stacks.block_originals.truncate(depth);
         match result {
             Ok(value) => value,
             Err(payload) => std::panic::resume_unwind(payload),
@@ -34,7 +34,7 @@ impl Game<'_> {
     /// Apply an engine in-place edit to the acting hand and its operation original.
     pub(super) fn edit_block_use_stack(&mut self, edit: impl Fn(&mut Option<ItemStack>)) {
         edit(self.held_mut());
-        if let Some((hand, original)) = self.block_use_original.last_mut()
+        if let Some((hand, original)) = self.item_use_stacks.block_originals.last_mut()
             && *hand == self.hand
         {
             edit(original);
@@ -49,7 +49,8 @@ impl Game<'_> {
     /// This matches vanilla passing the same stack object it read before the action.
     pub(super) fn finish_block_use(&mut self, pos: [i32; 3], _hand: Hand) {
         let stack = self
-            .block_use_original
+            .item_use_stacks
+            .block_originals
             .last_mut()
             .and_then(|(_, stack)| stack.take())
             .unwrap_or_else(|| ItemStack::new("minecraft:air", 0));

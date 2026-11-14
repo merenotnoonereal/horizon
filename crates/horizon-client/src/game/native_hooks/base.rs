@@ -3971,21 +3971,6 @@ impl Game<'_> {
     pub(in crate::game) fn native_player_totem(&mut self, player: u128, name: &str) {
         self.fire_player_totem(player, name);
     }
-    /// The item `item` of the server player `player` (`name`) broke in `slot`
-    /// (`mainhand`, `offhand`, `head`, `chest`, `legs`, `feet`, `body` or
-    /// `saddle`): `LivingEntity.onEquippedItemBroken`, Bukkit's
-    /// `PlayerItemBreakEvent`. Listen only; armour has a slot, not a hand.
-    /// The player's state is swapped in. Once for each break, on a server; a
-    /// creative player and the host of a LAN world are not heard.
-    pub(in crate::game) fn native_player_destroy_item(
-        &mut self,
-        player: u128,
-        name: &str,
-        item: &str,
-        slot: &str,
-    ) {
-        self.fire_player_destroy_item(player, name, item, slot);
-    }
     /// `player`'s melee blow killed the mob `entity` of `kind` (other deaths
     /// aren't told yet). It only hears, after the blow landed. Server-side.
     pub(in crate::game) fn native_mob_killed(&mut self, player: u128, entity: u32, kind: &str) {

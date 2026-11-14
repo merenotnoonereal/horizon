@@ -1900,7 +1900,7 @@ struct Game<'a> {
     /// The last `use_hand` that ended the click did so with `FAIL`, which
     /// does not consume the action (handleUseItemOn's ANY_BLOCK_USE).
     use_failed: bool,
-    block_use_original: Vec<(Hand, Option<ItemStack>)>,
+    item_use_stacks: item_use_stacks::ItemUseStacks,
     /// Level events of this tick for the guests, with their excluded source.
     lan_events: Vec<QueuedLevelEvent>,
     /// Jukebox level events 1010 (song name) and 1011 (`None`) for the guests;
@@ -11154,7 +11154,7 @@ impl<'a> Game<'a> {
             client_targeting: Default::default(),
             guest_use: None,
             use_failed: false,
-            block_use_original: Vec::new(),
+            item_use_stacks: Default::default(),
             lan_events: Vec::new(),
             lan_songs: Vec::new(),
             lan_cushion_breaks: Vec::new(),

@@ -1560,13 +1560,8 @@ impl Game<'_> {
         }
         self.audio
             .play("minecraft:item.ominous_bottle.dispose", Some(eye), 1.0, 1.0);
-        if !self.creative
-            && let Some(s) = self.stack_in_mut(slot).as_mut()
-        {
-            s.count -= 1;
-            if s.count == 0 {
-                *self.stack_in_mut(slot) = None;
-            }
+        if !self.creative {
+            self.consume_player_slot(slot, 1);
         }
     }
 }

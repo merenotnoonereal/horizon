@@ -3,7 +3,7 @@ use super::*;
 impl Game<'_> {
     /// MultiPlayerGameMode.useItem for `hand`, if it holds something: whether
     /// the click ends there, as far as this client can tell (`use_ends_click`).
-    pub(super) fn remote_use_item(&mut self, hand: Hand) -> bool {
+    pub(in crate::game) fn remote_use_item_inner(&mut self, hand: Hand) -> bool {
         // MultiPlayerGameMode.useItem: spectators pass before sending or predicting.
         if self.spectator() {
             return false;

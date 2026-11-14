@@ -1,0 +1,3 @@
+# Tests that also fail on a clean origin/main on aidan-51; pre-push-gate.sh reports them as UPSTREAM, not FAIL.
+# One test name per line (the first word), then why. Remove a line once main fixes it. Never add a test your change broke.
+test_the_rust_reader_fixture_is_what_pack_writes  xz/lzma output differs on aidan-51's Python (seen 2026-11-13 on main)

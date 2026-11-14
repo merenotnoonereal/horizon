@@ -450,8 +450,11 @@ fn unsubscribed_recipe_routes_never_enter_the_coordinator() {
                 });
             }
             script(false, false);
+            // `writes` only grows: the ordinary route journals nothing.
+            let writes = game.transactions.writes();
             request(game, route);
             assert_eq!((CALLS.get(), DECIDED.get(), APPLIED.get()), (0, 0, 0));
+            assert_eq!(game.transactions.writes(), writes);
             state(
                 game,
                 if matches!(route, Route::Transfer) {

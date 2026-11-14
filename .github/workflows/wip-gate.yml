@@ -28,6 +28,8 @@ jobs:
         run: |
           mkdir -p /tmp/gate && cp .wip-gate.sh .wip-known.txt .wip-checks /tmp/gate/
           rm -f .wip-gate.sh .wip-known.txt .wip-checks .github/workflows/wip-gate.yml
+          # Commit the cleaned tree: repository hygiene reads tracked files, and pr_ready wants a clean worktree.
+          git add -A && git -c user.name=gate -c user.email=gate@users.noreply.github.com commit -q -m 'gate: drop injected files'
       - name: Packages
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends pkg-config libasound2-dev libudev-dev libxkbcommon-x11-dev libwayland-dev libx11-xcb-dev libfontconfig-dev libvulkan-dev xz-utils
       - name: Rust

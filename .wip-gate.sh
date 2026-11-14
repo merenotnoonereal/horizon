@@ -54,8 +54,7 @@ FAILS=$((FAILS + $(grep -c '^FAIL     pr_ready' "$SUM")))
 grep -q '^exit=' "$L" || { say "FAIL     pr_ready did not finish"; FAILS=$((FAILS+1)); }
 grep -qE '^  [^ ].*: (pass|fail|skip|list|warn)( |$)' "$L" || { say "FAIL     pr_ready printed no steps"; tail -n 30 "$L" | tee -a "$SUM"; FAILS=$((FAILS+1)); }
 
-L=gate-logs/boundary-full.log
-python3 tools/ci/check_api_boundary.py > "$L" 2>&1; step "check_api_boundary (generated)" "$L" $?
+# check_api_boundary (generated) runs in the aidan-51 half (pre-push-gate.sh, GATE_LOCAL_ONLY=1).
 
 if [ "$FAILS" = 0 ]; then say "GITHUB PART PASS"; else say "GITHUB PART FAIL ($FAILS failing steps)"; fi
 [ "$FAILS" = 0 ]

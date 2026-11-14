@@ -1,23 +1,19 @@
 //! Recipe placement is one ordered menu plan, including all lent containers. Nothing is
 //! copied back until every callback has returned and the coordinator validates the read epoch.
 //! The unsubscribed routes in lan_crafting retain their ordinary path.
-use super::{
-    Game,
-    decided_action::Epoch,
-    lan_crafting::{load_player, store_player},
-};
+use super::{Game, decided_action::Epoch, lan_crafting::load_player};
 use crate::game::transactions::{
     After,
     decision::{Reply, engine::Target},
 };
 use horizon_client::{
-    containers::BlockEntity,
+    containers::{BlockEntity, ModLinks},
     furnace::FurnaceCooking,
     items::ItemStack,
-    lan::menu::ModCraft,
+    lan::menu::{ModCraft, linked_slot_count, read_links, write_links},
     menu::{Env, Kind, Menu},
 };
-use horizon_protocol::packets::play::Clientbound;
+use horizon_protocol::packets::play::{Clientbound, ContainerClick};
 use std::{cell::RefCell, rc::Rc};
 
 type Pos = (i32, i32, i32);
@@ -32,6 +28,7 @@ enum Destination {
     Mod {
         pos: Pos,
         items: Vec<Option<ItemStack>>,
+        linked: Option<(ModLinks, Vec<Pos>)>,
     },
     Furnace {
         pos: Pos,
@@ -98,6 +95,44 @@ impl Game<'_> {
         publish: bool,
         op: impl FnOnce(&mut Menu, &Env) -> R,
     ) -> Option<R> {
+        self.lan_recipe_action(gi, container, book, publish, None, op)
+    }
+
+    /// A subscribed mod result click stays handled when its entire action is refused.
+    pub(super) fn lan_mod_recipe_click(&mut self, gi: usize, packet: &ContainerClick) -> bool {
+        let click = super::lan_pickup::click_of(packet);
+        if self
+            .lan_recipe_action(
+                gi,
+                packet.container,
+                None,
+                true,
+                Some(click),
+                |menu, env| {
+                    let _ = menu.click(env, click.0, click.1, click.2);
+                },
+            )
+            .is_none()
+        {
+            let g = &self.lan.as_ref().unwrap().hub.guests[gi];
+            self.after_commit(After::Recipe(Publication::Sync {
+                conn: g.conn,
+                generation: g.menu_generation,
+                container: packet.container,
+            }));
+        }
+        true
+    }
+
+    fn lan_recipe_action<R>(
+        &mut self,
+        gi: usize,
+        container: i32,
+        book: Option<(&str, bool)>,
+        publish: bool,
+        click: Option<super::lan_pickup::Click>,
+        op: impl FnOnce(&mut Menu, &Env) -> R,
+    ) -> Option<R> {
         let conn = self.lan.as_ref()?.hub.guests.get(gi)?.conn;
         let actor = self.guest_actor(conn)?;
         let route = self.guest_route(conn)?;
@@ -153,7 +188,8 @@ impl Game<'_> {
             },
             move |game| {
                 let writes = game.transactions.writes();
-                let Some(mut placement) = game.recipe_placement(gi, container) else {
+                let Some(mut placement) = game.recipe_placement(gi, container, click.is_some())
+                else {
                     return Reply::Failed;
                 };
                 // Source selection can itself call a listener. Never choose replacement inputs
@@ -162,9 +198,33 @@ impl Game<'_> {
                     // The coordinator's epoch check supplies Stale before attempting apply.
                     return Reply::Allow;
                 }
+                let stacked = if let Some((slot, button, mode)) = click
+                    && Self::stacked_listened()
+                    && let Some(frozen) =
+                        placement
+                            .menu
+                            .stacked_click(&game.menu_env(), slot, button, mode)
+                {
+                    let guest = &game.lan.as_ref().unwrap().hub.guests[gi];
+                    let frozen = horizon_client::menu::StackedClick {
+                        player: Some(guest.uuid),
+                        player_entity_id: Some(guest.entity_id),
+                        ..frozen
+                    };
+                    match super::stacked_on_other::fire_frozen(game, &frozen) {
+                        Ok(answer) => Some(answer),
+                        Err(reason) => return Reply::Invalid(reason),
+                    }
+                } else {
+                    None
+                };
                 let host = game.lan.as_ref().unwrap();
                 let guest = &host.hub.guests[gi];
+                let parts = game.menu_can_equip();
                 let env = Env {
+                    crafting_remainder: Some(game),
+                    can_equip: Some(&parts),
+                    stacked: stacked.as_ref(),
                     player: Some(guest.uuid),
                     player_entity_id: Some(guest.entity_id),
                     known_recipes: Some(&guest.recipe_book),
@@ -172,6 +232,7 @@ impl Game<'_> {
                     ..game.menu_env()
                 };
                 let out = op(&mut placement.menu, &env);
+                drop(parts);
                 // The selected inputs and every destination are now fixed. The book's notice
                 // cannot change the plan, and a Host write makes the entire action stale.
                 if let Some((id, all)) = book {
@@ -205,7 +266,7 @@ impl Game<'_> {
         if applied { result.take() } else { None }
     }
 
-    fn recipe_placement(&mut self, gi: usize, container: i32) -> Option<Placement> {
+    fn recipe_placement(&mut self, gi: usize, container: i32, clicking: bool) -> Option<Placement> {
         let conn = self.lan.as_ref()?.hub.guests.get(gi)?.conn;
         let mut sources = Vec::new();
         let (mut menu, destination) =
@@ -222,13 +283,41 @@ impl Game<'_> {
                     .and_then(|p| p.crafting.machine.as_ref())
                     .filter(|(w, m)| *w == container && m.kind() == Kind::Mod(t))
                     .map_or_else(|| Box::new(Menu::new(Kind::Mod(t))), |(_, m)| m.clone());
-                menu.load_container(&self.menu_env(), &items);
-                if let Some((slot, result)) = Self::lan_mod_craft_shown(host, gi, &items) {
+                let linked = if clicking {
+                    let opened = host.hub.guests[gi].menu.as_ref().unwrap();
+                    menu.set_registry_id(Some(&opened.registry_id));
+                    for &slot in &opened.hidden {
+                        menu.hide_slot(slot);
+                    }
+                    t.links.map(|l| {
+                        let bound = linked_slot_count(&self.world, &opened.links);
+                        for slot in l.slots().skip(bound) {
+                            menu.hide_slot(slot);
+                        }
+                        (l, opened.links.clone())
+                    })
+                } else {
+                    None
+                };
+                let mut shown_items = items.clone();
+                if let Some((l, links)) = &linked {
+                    for (k, stack) in l.slots().zip(
+                        read_links(&self.world, links, l.count)
+                            .into_iter()
+                            .chain(std::iter::repeat(None)),
+                    ) {
+                        shown_items[k] = stack;
+                    }
+                }
+                menu.load_container(&self.menu_env(), &shown_items);
+                if let Some((slot, result)) = Self::lan_mod_craft_shown(host, gi, &shown_items) {
                     menu.set_slot(&self.menu_env(), slot, result);
                 }
-                sources = self.lan_recipe_sources(gi, t, pos);
+                if !clicking {
+                    sources = self.lan_recipe_sources(gi, t, pos);
+                }
                 menu.sources = sources.iter().map(|(_, items)| items.clone()).collect();
-                (menu, Destination::Mod { pos, items })
+                (menu, Destination::Mod { pos, items, linked })
             } else if container == 0 {
                 let host = self.lan.as_ref()?;
                 let mut menu = host
@@ -310,14 +399,8 @@ impl Game<'_> {
         let conn = self.lan.as_ref().unwrap().hub.guests[gi].conn;
         self.journal_guest_click(conn);
         Target::keep_recipe(self, conn);
-        let dropped = std::mem::take(&mut menu.dropped);
-        menu.drops.clear();
-        self.lan
-            .as_mut()
-            .unwrap()
-            .hub
-            .guests
-            .update(gi, |g| store_player(&mut menu, g));
+        self.settle_guest_menu(gi, &mut menu)
+            .expect("validated recipe guest");
         // The order is the order the lower planner consumed sources in. All are journaled
         // before the first write, so even an unwind cannot publish a successful prefix.
         for (pos, _) in &sources {
@@ -350,8 +433,21 @@ impl Game<'_> {
                     .crafting
                     .table = Some((container, state, menu, pos));
             }
-            Destination::Mod { pos, items } => {
-                let after = menu.container_items();
+            Destination::Mod { pos, items, linked } => {
+                let mut after = menu.container_items();
+                if let Some((l, links)) = linked {
+                    for &at in &links {
+                        self.journal_block_entity(at);
+                    }
+                    let mut linked_after: Vec<_> = l
+                        .slots()
+                        .filter_map(|k| after.get_mut(k).map(Option::take))
+                        .collect();
+                    linked_after.truncate(linked_slot_count(&self.world, &links).min(l.count));
+                    for at in write_links(&mut self.world, &links, linked_after) {
+                        self.container_changed(at);
+                    }
+                }
                 if after != items {
                     self.journal_block_entity(pos);
                     self.write_recipe_container(pos, after);
@@ -392,7 +488,6 @@ impl Game<'_> {
                     .machine = Some((container, menu));
             }
         }
-        self.drop_guest_items(gi, dropped);
         let generation = self.lan.as_ref().unwrap().hub.guests[gi].menu_generation;
         self.after_commit(After::Recipe(Publication::Sync {
             conn,
@@ -411,7 +506,7 @@ impl Game<'_> {
                     *slot = stack;
                 }
             }
-            _ => unreachable!("validated recipe source"),
+            _ => return,
         }
         self.container_changed(pos);
     }
@@ -473,7 +568,15 @@ impl Game<'_> {
             }
             Publication::Sync { .. } if container == 0 => host.hub.send_inventory(gi),
             Publication::Sync { .. } => {
-                self.lan_send_table_content(conn);
+                if host.hub.guests[gi]
+                    .menu
+                    .as_ref()
+                    .is_some_and(|m| m.window == container)
+                {
+                    host.hub.resend_menu(conn, container, &self.world);
+                } else {
+                    self.lan_send_table_content(conn);
+                }
             }
             Publication::Packet(..) => unreachable!(),
         }

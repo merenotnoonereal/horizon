@@ -573,3 +573,39 @@ impl Menu {
         }
     }
 }
+
+/// A grindstone menu before a click, for `Menu::grindstone_cancel`: slots 0
+/// to 2 and the cursor.
+#[derive(Clone, Debug, PartialEq)]
+// exhaustive: the game builds it with a literal; mods cannot see its fields
+pub struct GrindstoneUndo {
+    inputs: [Option<ItemStack>; 2],
+    result: Option<ItemStack>,
+    carried: Option<ItemStack>,
+}
+
+impl Menu {
+    /// The grindstone menu as it is before a click that may take its result.
+    pub fn grindstone_undo(&self) -> GrindstoneUndo {
+        GrindstoneUndo {
+            inputs: [
+                self.state.containers[MAIN][0].clone(),
+                self.state.containers[MAIN][1].clone(),
+            ],
+            result: self.state.containers[RESULT][0].clone(),
+            carried: self.state.carried.clone(),
+        }
+    }
+
+    /// Refuses a take that `grind_hook` deferred: the result and inputs go
+    /// back and the cursor is as `undo` held it.
+    pub fn grindstone_cancel(&mut self, undo: GrindstoneUndo) {
+        self.touch();
+        self.state.containers[MAIN][0] = undo.inputs[0].clone();
+        self.state.containers[MAIN][1] = undo.inputs[1].clone();
+        self.state.containers[RESULT][0] = undo.result;
+        self.state.carried = undo.carried;
+        self.state.grind_take = None;
+        self.state.dropped.clear();
+    }
+}

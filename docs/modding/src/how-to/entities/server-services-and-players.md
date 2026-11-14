@@ -138,8 +138,12 @@ For mods that copy or edit a player whole (a player-data sync, `/invsee`, `/ende
 | `persistent_data(host)` / `set_persistent_data(host, data)` | The compound mods keep on a player (NeoForge's `getPersistentData`), saved with the player under `NeoForgeData`; an empty compound removes it. It is never sent to a client and a change raises no notification. On a death respawn and on the first exit from the End only its `PlayerPersisted` sub-compound is carried over, whatever its type, and every other key is lost; dimension changes, later End exits and teleports keep all of it. Refuses with `Stale`, `Client`, `Dead` and `TooDeep` (data 512 levels deep or more in the player's file). For ports; new mods use attachments. |
 | `host.item_from_snbt(snbt)` | The stack an SNBT item compound stands for, read as a saved item is: `{id:"minecraft:stone",count:3,components:{...}}` (`count` 1 when missing). Returns `None` for text that is not one compound (anything but whitespace after it included), a `count` outside 1 to 99 (refused, not clamped), air and an item the world lacks. It also refuses text over 2 MiB or nested past 512 levels: that is this API's own safety bound, the one place it differs from vanilla, whose SNBT parser has no size or depth limit (deep text overflows its stack); the figures are binary NBT's limits, taken so mod-supplied text cannot overflow the parser. |
 
-For `set_inventory_slot`, `set_ender_chest_slot`, `give_stack` and `set_persistent_data`:
-Applied at once: an abort of the open transaction does not undo it.
-Transaction rollback support is tracked in [#4288](https://github.com/arismoko/horizon/issues/4288).
-
 A stack in an inventory slot, the ender chest or `give_stack` keeps all its components. Mods that move inventories between servers can write back a stack read from a slot unchanged. `item_from_snbt` does not apply the item's stack or damage limits, so its result can still be refused on write with `Err(Stack(StackWriteError))`.
+
+Player inventory writes use vanilla numbers: 0 to 35 main (0 to 8 hotbar),
+36 to 39 armour feet to head, 40 offhand, 41 body, 42 saddle.
+`ItemPlace::PlayerSlot` uses 100 to 103 for armour and -106 for offhand.
+The inventory menu has no slot for body or saddle. All four player data writes
+(`set_inventory_slot`, `set_ender_chest_slot`, `give_stack`, `set_persistent_data`)
+are undone by an open transaction abort; equipment effects and overflow drops
+wait for the outermost commit.

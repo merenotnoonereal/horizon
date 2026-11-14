@@ -2,7 +2,7 @@
 //! public player handle.
 
 use super::native_guest_turn_tests::with_guests;
-use mod_api::{Host, ItemStack, PlayerDataRefusal, StackWriteError, prelude::*};
+use mod_api::{Host, HostTransaction, ItemStack, PlayerDataRefusal, StackWriteError, prelude::*};
 
 fn api_item(game: &super::Game<'_>, snbt: &str) -> Option<ItemStack> {
     let host: &dyn Host = game;
@@ -182,5 +182,128 @@ fn a_written_slot_is_what_the_open_inventory_menu_shows_and_clicks() {
         );
         assert_eq!(g.menu_slot(44), None);
         assert_eq!(g.inventory[8], None, "the old stack is gone");
+    });
+}
+
+#[test]
+#[ignore = "daily"]
+fn inventory_write_aborts() {
+    with_guests(|game| {
+        let player = game.players().server_players()[1];
+        let new = stack(game, r#"{id:"minecraft:iron_boots",count:1}"#);
+        let old = stack(game, r#"{id:"minecraft:stone",count:64}"#);
+        player.set_inventory_slot(game, 36, Some(old)).unwrap();
+        let before = player.inventory_slots(game);
+        let _: Result<(), ()> = game.transaction(|host, _| {
+            player.set_inventory_slot(host, 36, Some(new)).unwrap();
+            Err(())
+        });
+        assert_eq!(player.inventory_slots(game), before);
+    });
+}
+
+#[test]
+#[ignore = "daily"]
+fn ender_write_aborts() {
+    with_guests(|game| {
+        let player = game.players().server_players()[1];
+        let new = stack(game, r#"{id:"minecraft:iron_boots",count:1}"#);
+        let old = stack(game, r#"{id:"minecraft:stone",count:64}"#);
+        player.set_ender_chest_slot(game, 0, Some(old)).unwrap();
+        let before = player.ender_chest(game);
+        let _: Result<(), ()> = game.transaction(|host, _| {
+            player.set_ender_chest_slot(host, 0, Some(new)).unwrap();
+            Err(())
+        });
+        assert_eq!(player.ender_chest(game), before);
+    });
+}
+
+#[test]
+#[ignore = "daily"]
+fn data_write_aborts() {
+    with_guests(|game| {
+        let player = game.players().server_players()[1];
+        let mut data = horizon_core::nbt::Compound::new();
+        data.insert("old".into(), horizon_core::nbt::Tag::Int(7));
+        player.set_persistent_data(game, data).unwrap();
+        let before = player.persistent_data(game);
+        let _: Result<(), ()> = game.transaction(|host, _| {
+            player
+                .set_persistent_data(host, Default::default())
+                .unwrap();
+            Err(())
+        });
+        assert_eq!(player.persistent_data(game), before);
+    });
+}
+
+#[test]
+#[ignore = "daily"]
+fn give_write_aborts() {
+    with_guests(|game| {
+        let player = game.players().server_players()[1];
+        let new = stack(game, r#"{id:"minecraft:iron_boots",count:1}"#);
+        let old = stack(game, r#"{id:"minecraft:stone",count:64}"#);
+        // An empty destination exercises rollback of a successful insertion, not only
+        // suppression of the overflow drop from a completely full inventory.
+        assert_eq!(player.inventory_slots(game), Some(Vec::new()));
+        let drops = game.dropped.len();
+        let _: Result<(), ()> = game.transaction(|host, _| {
+            player.give_stack(host, new.clone()).unwrap();
+            assert_eq!(player.inventory_slots(host), Some(vec![(0, new.clone())]));
+            Err(())
+        });
+        assert_eq!(player.inventory_slots(game), Some(Vec::new()));
+        assert_eq!(game.dropped.len(), drops);
+        for slot in 0..36 {
+            player
+                .set_inventory_slot(game, slot, Some(old.clone()))
+                .unwrap();
+        }
+        let before = player.inventory_slots(game);
+        let drops = game.dropped.len();
+        let _: Result<(), ()> = game.transaction(|host, _| {
+            player.give_stack(host, new).unwrap();
+            Err(())
+        });
+        assert_eq!(player.inventory_slots(game), before);
+        assert_eq!(game.dropped.len(), drops);
+    });
+}
+
+#[test]
+#[ignore = "daily"]
+fn equipment_effects_wait_for_root() {
+    with_guests(|game| {
+        let player = game.players().server_players()[1];
+        let new = stack(game, r#"{id:"minecraft:iron_boots",count:1}"#);
+        game.audio.capture = Some(Vec::new());
+        let _: Result<(), ()> = game.transaction(|host, _| {
+            host.transaction(|host, _| {
+                player
+                    .set_inventory_slot(host, 36, Some(new.clone()))
+                    .unwrap();
+                Ok::<(), ()>(())
+            })?;
+            Err(())
+        });
+        assert!(game.audio.capture.as_ref().unwrap().is_empty());
+        let inner = stack(game, r#"{id:"minecraft:diamond_helmet",count:1}"#);
+        let _: Result<(), ()> = game.transaction(|host, _| {
+            player
+                .set_inventory_slot(host, 36, Some(new.clone()))
+                .unwrap();
+            let outer = player.inventory_slots(host);
+            let aborted: Result<(), ()> = host.transaction(|host, _| {
+                player.set_inventory_slot(host, 39, Some(inner)).unwrap();
+                Err(())
+            });
+            assert_eq!(aborted, Err(()));
+            assert_eq!(player.inventory_slots(host), outer);
+            Ok(())
+        });
+        assert_eq!(player.inventory_slots(game), Some(vec![(36, new)]));
+        assert_eq!(game.audio.capture.as_ref().unwrap().len(), 1);
     });
 }

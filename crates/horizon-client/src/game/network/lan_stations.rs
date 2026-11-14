@@ -8,13 +8,18 @@ use super::{
     Game,
     stations::{Kind as StationKind, Station},
 };
+use crate::game::{
+    decided_action::Epoch,
+    transactions::decision::{InvalidReason, Reply},
+};
 use horizon_client::{
     containers::BlockEntity,
     items::ItemStack,
-    menu::{AnvilCraft, Kind, Menu},
+    menu::{AnvilCraft, GrindstonePlace, GrindstoneTake, Kind, Menu},
 };
 use horizon_core::random::RandomSource;
 use horizon_protocol::packets::play::{self, Clientbound as C};
+use std::{cell::RefCell, rc::Rc};
 
 /// A guest's open workstation menu.
 #[derive(Clone)]
@@ -181,8 +186,12 @@ impl Game<'_> {
             });
             let mut undo = None;
             let hook = gs.menu.anvil_hook;
+            let mut grind_undo = None;
+            let grind_hook = gs.menu.grind_hook
+                && mod_api::__private::listened(mod_api::HookId::GrindstoneTake);
             self.guest_menu_op_decided(gi, &mut gs.menu, click, None, |menu, env| {
                 undo = hook.then(|| menu.anvil_undo());
+                grind_undo = grind_hook.then(|| menu.grindstone_undo());
                 op(menu, env);
             });
             // AnvilCraftEvent.Pre: the taken result's onTake waits for the mods.
@@ -220,11 +229,66 @@ impl Game<'_> {
                     .as_ref()
                     .map(|host| (host.hub.guests[gi].uuid, host.hub.guests[gi].entity_id))
                     .unwrap_or((0, 0));
-                let mut cancel = false;
-                self.api_grindstone_take(uuid, entity_id, gs.pos, &mut take, &mut cancel);
-                cancelled |= cancel;
-                let env = self.menu_env();
-                ground_xp = gs.menu.grindstone_taken(&env, take, cancel);
+                let decided = if let Some(undo) = grind_undo.take() {
+                    match (self.guest_actor(conn), self.guest_route(conn)) {
+                        (Some(actor), Some(route)) => Some((undo, actor, route)),
+                        _ => None,
+                    }
+                } else {
+                    None
+                };
+                let pos = gs.pos;
+                if let Some((undo, actor, route)) = decided {
+                    let answer = Rc::new(RefCell::new(None::<(GrindstoneTake, bool)>));
+                    let kept = answer.clone();
+                    let applied = self.decided_action(
+                        "grindstone_take",
+                        route,
+                        actor,
+                        Epoch::Player,
+                        |_| true,
+                        move |game| {
+                            let mut take = take;
+                            let mut cancel = false;
+                            game.api_grindstone_take(
+                                uuid,
+                                entity_id,
+                                pos,
+                                &mut take,
+                                &mut cancel,
+                            );
+                            if !cancel
+                                && (take.xp < -1
+                                    || take.new_top.as_ref().is_some_and(|s| s.count < 1)
+                                    || take.new_bottom.as_ref().is_some_and(|s| s.count < 1))
+                            {
+                                return Reply::Invalid(InvalidReason::Plan);
+                            }
+                            *kept.borrow_mut() = Some((take, cancel));
+                            Reply::Allow
+                        },
+                        |_| {},
+                    );
+                    if applied {
+                        if let Some((take, cancel)) = answer.borrow_mut().take() {
+                            cancelled |= cancel;
+                            let env = self.menu_env();
+                            ground_xp = gs.menu.grindstone_taken(&env, take, cancel);
+                        }
+                    } else {
+                        self.guest_menu_op(gi, &mut gs.menu, |menu, _| {
+                            menu.grindstone_cancel(undo);
+                        });
+                        cancelled = true;
+                        ground_xp = None;
+                    }
+                } else {
+                    let mut cancel = false;
+                    self.api_grindstone_take(uuid, entity_id, pos, &mut take, &mut cancel);
+                    cancelled |= cancel;
+                    let env = self.menu_env();
+                    ground_xp = gs.menu.grindstone_taken(&env, take, cancel);
+                }
             }
             // A cancelled take runs no createResult: the inputs are untouched.
             let recomputed = !cancelled
@@ -259,10 +323,56 @@ impl Game<'_> {
                     .as_ref()
                     .map(|host| (host.hub.guests[gi].uuid, host.hub.guests[gi].entity_id))
                     .unwrap_or((0, 0));
-                let mut place = gs.menu.grindstone_place();
-                let mut cancel = false;
-                self.api_grindstone_place(uuid, entity_id, gs.pos, &mut place, &mut cancel);
-                gs.menu.grindstone_placed(place, cancel);
+                if mod_api::__private::listened(mod_api::HookId::GrindstonePlace)
+                    && let Some(actor) = self.guest_actor(conn)
+                    && let Some(route) = self.guest_route(conn)
+                {
+                    let slots: Vec<_> = (0..=2).map(|s| gs.menu.slot(s).cloned()).collect();
+                    let place = gs.menu.grindstone_place();
+                    let original = place.clone();
+                    let answer = Rc::new(RefCell::new(None::<(GrindstonePlace, bool)>));
+                    let kept = answer.clone();
+                    let pos = gs.pos;
+                    let applied = self.decided_action(
+                        "grindstone_place",
+                        route,
+                        actor,
+                        Epoch::Player,
+                        |_| (0..=2).all(|s| gs.menu.slot(s).cloned() == slots[s]),
+                        move |game| {
+                            let mut place = place;
+                            let mut cancel = false;
+                            game.api_grindstone_place(
+                                uuid,
+                                entity_id,
+                                pos,
+                                &mut place,
+                                &mut cancel,
+                            );
+                            if !cancel
+                                && (place.xp < 0
+                                    || place.output.as_ref().is_some_and(|s| s.count < 1))
+                            {
+                                return Reply::Invalid(InvalidReason::Plan);
+                            }
+                            *kept.borrow_mut() = Some((place, cancel));
+                            Reply::Allow
+                        },
+                        |_| {},
+                    );
+                    if applied {
+                        if let Some((place, cancel)) = answer.borrow_mut().take() {
+                            gs.menu.grindstone_placed(place, cancel);
+                        }
+                    } else {
+                        gs.menu.grindstone_placed(original, true);
+                    }
+                } else {
+                    let mut place = gs.menu.grindstone_place();
+                    let mut cancel = false;
+                    self.api_grindstone_place(uuid, entity_id, gs.pos, &mut place, &mut cancel);
+                    gs.menu.grindstone_placed(place, cancel);
+                }
             }
             if recomputed && gs.kind == StationKind::Smithing {
                 let (uuid, name) = self

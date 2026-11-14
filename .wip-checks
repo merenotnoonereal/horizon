@@ -1,0 +1,2 @@
+clippy --workspace --all-targets -- -D warnings
+test -p horizon-client --lib -- player_disconnect fake_player kick

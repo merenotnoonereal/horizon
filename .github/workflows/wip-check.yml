@@ -1,0 +1,62 @@
+# Injected only into wip/* commits on merenotnoonereal/horizon (never in a PR branch): runs the compile, clippy and
+# plain-test checks listed in .wip-checks (one cargo argument line each) on GitHub's runner, so aidan-51 keeps only
+# the tests that need the prepared vanilla data. Pushed by scratch/wip-push.ps1.
+name: wip-check
+on:
+  push:
+    branches: ['wip/**']
+concurrency:
+  group: ${{ github.ref }}
+  cancel-in-progress: true
+permissions:
+  contents: read
+env:
+  HORIZON_TELEMETRY_URL: "off"
+  CARGO_INCREMENTAL: 0
+  CARGO_TERM_COLOR: never
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    steps:
+      - name: Free disk space
+        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL /usr/local/share/boost && df -h /
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Packages
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends pkg-config libasound2-dev libudev-dev libxkbcommon-x11-dev libwayland-dev libx11-xcb-dev libfontconfig-dev libvulkan-dev
+      - name: Rust
+        run: rustup toolchain install stable --profile minimal --component rustfmt --component clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: wip
+          cache-on-failure: true
+      - name: Checks
+        run: |
+          set +e
+          fail=0; i=0; : > checks.txt
+          while IFS= read -r line || [ -n "$line" ]; do
+            [ -z "$line" ] && continue
+            echo "::group::cargo $line"
+            eval "cargo +stable $line" > "out-$i.log" 2>&1; rc=$?
+            tail -n 40 "out-$i.log"
+            echo "::endgroup::"
+            if [ $rc -ne 0 ]; then
+              fail=1
+              echo "## FAILED: cargo $line" >> checks.txt
+              grep -v -E 'missing `\[lints\]`|\(manifest\) generated|missing_lints_inheritance|/Cargo.toml$' "out-$i.log" | grep -E '^(error|warning)(\[|:)|^ *--> |^ *= (note|help)|panicked at|assertion|left:|right:|FAILED|test result' | head -n 80 >> checks.txt
+              echo >> checks.txt
+            else
+              echo "## ok: cargo $line" >> checks.txt
+            fi
+            i=$((i+1))
+          done < .wip-checks
+          echo "result fail=$fail" >> checks.txt
+          cat checks.txt
+          exit $fail
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: wip-checks
+          path: checks.txt

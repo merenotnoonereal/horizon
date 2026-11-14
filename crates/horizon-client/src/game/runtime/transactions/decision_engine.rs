@@ -48,6 +48,15 @@ enum KeptValue {
 }
 
 impl Target {
+    /// Keep even an empty owner before a recipe installs its frozen menu.
+    pub(in crate::game) fn keep_recipe(game: &mut Game<'_>, conn: u32) {
+        for owner in [Owner::Inventory, Owner::Table, Owner::Machine] {
+            if let Some(target) = Self::find(game, conn, owner) {
+                target.keep_in(game);
+            }
+        }
+    }
+
     /// Check the active action before looking in a slot that an outer action
     /// might have lifted. A missing menu is never the reentrancy mechanism.
     pub(in crate::game) fn admit(

@@ -108,6 +108,7 @@ horizon-client game::native_explosion_resistance_tests::a_reads_calculator_is_th
 horizon-client game::native_explosion_resistance_tests::a_two_layer_box_reads_y_after_z_after_x lib daily resources
 horizon-client game::native_server::network_settings_tests::server_settings_follow_the_network_config lib daily slow
 horizon-client game::natural_spawning::tests::spawn_candidates_match_the_uncached_union_while_players_move lib daily slow
+horizon-client game::player_destroy_item_tests::original_stack_and_hand_reach_used_up_and_broken_item_notices lib daily network
 horizon-client game::remote::interaction_event_tests::mapping_press_tests::a_callback_click_survives_until_the_next_tick lib daily resources
 horizon-client game::remote::interaction_event_tests::mapping_press_tests::a_screen_drops_the_clicks_and_holds_nothing lib daily resources
 horizon-client game::remote::interaction_event_tests::mapping_press_tests::clicking_attack_on_a_block_starts_the_break_and_punches lib daily resources

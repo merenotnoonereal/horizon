@@ -200,6 +200,7 @@ impl Game<'_> {
                         horizon_core::equipment_slot::EquipmentSlot::MainHand
                     };
                     self.player_equipment_broke(hand, &broken);
+                    self.player_item_destroyed(&stack, self.item_slot_hand(slot));
                     self.award_stat("broken", &broken.item, 1);
                     return;
                 }

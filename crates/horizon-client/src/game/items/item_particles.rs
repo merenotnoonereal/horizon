@@ -62,6 +62,12 @@ impl Game<'_> {
                 self.break_sound_at(&stack, [p.x, p.y, p.z]);
             }
             self.eat_particles(&stack, 5);
+            let hand = match slot {
+                EquipmentSlot::MainHand => Some(horizon_client::first_person::Hand::Main),
+                EquipmentSlot::OffHand => Some(horizon_client::first_person::Hand::Off),
+                _ => None,
+            };
+            self.player_item_destroyed(&stack, hand);
             return;
         }
         let Some(m) = self.mobs.iter().find(|m| m.id == id as u32) else {

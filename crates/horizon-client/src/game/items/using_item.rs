@@ -72,19 +72,6 @@ impl Game<'_> {
         }
         self.award_stat("used", &stack.item, 1);
     }
-    pub(super) fn consume_held(&mut self) {
-        if self.creative {
-            return;
-        }
-        self.edit_block_use_stack(|cell| {
-            if let Some(s) = cell.as_mut() {
-                s.count = s.count.saturating_sub(1);
-                if s.count == 0 {
-                    *cell = None;
-                }
-            }
-        });
-    }
     pub(super) fn tick_using(&mut self) {
         let Some(hand) = self.used_hand() else {
             return;

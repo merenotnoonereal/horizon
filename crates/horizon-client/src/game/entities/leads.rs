@@ -689,14 +689,7 @@ impl Game<'_> {
                 self.lead_sound("tied", at);
                 // `Player.interactOn` restores the count of a player with
                 // infinite materials (creative); others spend the lead.
-                if !self.creative
-                    && let Some(stack) = self.held_mut().as_mut()
-                {
-                    stack.count -= 1;
-                    if stack.count == 0 {
-                        *self.held_mut() = None;
-                    }
-                }
+                self.consume_held();
                 return Some(LeashInteraction::WithItem);
             }
         }

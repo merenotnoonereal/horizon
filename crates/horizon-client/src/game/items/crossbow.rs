@@ -267,13 +267,7 @@ impl Game<'_> {
             if !self.creative
                 && let Some(i) = ammo.slot
             {
-                let cell = self.stack_in_mut(i);
-                if let Some(s) = cell.as_mut() {
-                    s.count -= 1;
-                    if s.count == 0 {
-                        *cell = None;
-                    }
-                }
+                self.consume_player_slot(i, 1);
             }
             let ammo = ammo.stack;
             // useAmmo: the extra multishot arrows and creative's are intangible.

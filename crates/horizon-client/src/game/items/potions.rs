@@ -977,12 +977,7 @@ impl Game<'_> {
             self.apply_effect_action(a);
         }
         if !self.creative {
-            if let Some(s) = self.stack_in_mut(slot).as_mut() {
-                s.count -= 1;
-                if s.count == 0 {
-                    *self.stack_in_mut(slot) = None;
-                }
-            }
+            self.consume_player_slot(slot, 1);
             let bottle = ItemStack::new("minecraft:glass_bottle", 1);
             if self.stack_in(slot).is_none() {
                 *self.stack_in_mut(slot) = Some(bottle);

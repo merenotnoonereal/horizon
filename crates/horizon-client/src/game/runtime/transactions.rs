@@ -434,12 +434,13 @@ impl Game<'_> {
     }
     /// What closing `level` does, with the closing phase already set.
     fn close_level(&mut self, mut level: Level, commit: bool) {
-        if let Some(scope) = level.packets.take() {
-            if commit && let Some(packets) = scope.finish() {
-                level.after.push(After::Trade(Box::new(
-                    super::lan_trade_decisions::Effect::Packets(packets),
-                )));
-            }
+        if let Some(scope) = level.packets.take()
+            && commit
+            && let Some(packets) = scope.finish()
+        {
+            level.after.push(After::Trade(Box::new(
+                super::lan_trade_decisions::Effect::Packets(packets),
+            )));
         }
         if let Some(scope) = &mut self.block_entity_tick_items {
             scope.close_transaction(commit);

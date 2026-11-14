@@ -22,10 +22,7 @@ mod stubs {
         }
     }
     pub(super) mod chunk_disk {
-        pub(crate) fn invoke(
-            _: &str,
-            call: impl FnOnce(),
-        ) -> Result<(), super::ChunkDiskFailure> {
+        pub(crate) fn invoke(_: &str, call: impl FnOnce()) -> Result<(), super::ChunkDiskFailure> {
             call();
             Ok(())
         }

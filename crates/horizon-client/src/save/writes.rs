@@ -43,6 +43,28 @@ impl SaveDir {
         wait: bool,
     ) -> Result<()> {
         if !records.is_empty() {
+            let mut writer = self.writer.lock().map_err(|_| "writer poisoned")?;
+            let records = if self.disk.get().is_some()
+                || mod_api::__private::listened(mod_api::HookId::ChunkDataSave)
+            {
+                let keys: Vec<_> = records.iter().map(|(key, _)| *key).collect();
+                match records
+                    .into_iter()
+                    .map(|(key, record)| {
+                        self.capture_disk_record(record).map(|record| (key, record))
+                    })
+                    .collect::<Result<Vec<_>>>()
+                {
+                    Ok(records) => records,
+                    Err(error) => {
+                        // A refused capture must leave its chunks dirty.
+                        self.note_refused_saves(folder, &keys);
+                        return Err(error);
+                    }
+                }
+            } else {
+                records
+            };
             let mut batch = Vec::with_capacity(records.len());
             {
                 let mut pending = self.pending.lock().map_err(|_| "pending writes poisoned")?;
@@ -61,7 +83,6 @@ impl SaveDir {
                 .count
                 .lock()
                 .map_err(|_| "writer poisoned")? += 1;
-            let mut writer = self.writer.lock().map_err(|_| "writer poisoned")?;
             let writer = writer.get_or_insert_with(|| self.start_writer());
             let chunks = if folder == Folder::Region {
                 batch.len()
@@ -123,8 +144,12 @@ impl SaveDir {
                         .filter_map(|(k, r, _)| Some((*k, resolve_poi(&root, cache, *k, r)?)))
                         .collect();
                     let records: Vec<_> = resolved.iter().map(|(k, r)| (*k, r)).collect();
-                    let result = write_region_records(&root, cache, folder, &records);
+                    let result = (|| -> Result<()> {
+                        chunk_disk::prepare_batch(&batch)?;
+                        write_region_records(&root, cache, folder, &records)
+                    })();
                     if let Err(e) = &result {
+                        chunk_disk::note_failed(&batch);
                         let message = format!("failed to write {folder} files: {e}");
                         log::warn!("Horizon: {message}");
                         *outstanding.error.lock().unwrap() = Some(message);

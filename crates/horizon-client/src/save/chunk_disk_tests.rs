@@ -253,12 +253,14 @@ fn every_save_kind_runs_exactly_one_callback_per_captured_record() {
 }
 
 #[test]
+#[ignore = "daily"]
 fn save_refused_during_open_action_savepoint_runs_no_callback_and_keeps_disk_7() {
     // The savepoint signal is process-wide: hold it only in an isolated child.
     const CHILD: &str = "HORIZON_CHUNK_DISK_SAVEPOINT_CHILD";
     if std::env::var_os(CHILD).is_none() {
         let status = std::process::Command::new(std::env::current_exe().unwrap())
             .args([
+                "--include-ignored",
                 "--exact",
                 "save::chunk_disk_tests::save_refused_during_open_action_savepoint_runs_no_callback_and_keeps_disk_7",
             ])

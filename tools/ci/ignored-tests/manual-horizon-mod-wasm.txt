@@ -10,6 +10,7 @@ horizon-mod-wasm generated_mixed_outputs_cross_real_guest_boundary wasm-mods.yml
 horizon-mod-wasm module_cache::tests::measure_child_compile by-hand manual # local child measurement; set HORIZON_CACHE_BENCH_WASM
 horizon-mod-wasm module_cache::tests::measure_compile_and_cached_load by-hand manual # local timing measurement; set HORIZON_CACHE_BENCH_WASM
 horizon-mod-wasm module_cache::tests::measure_serialized_sizes by-hand manual # local size measurement; set HORIZON_CACHE_SIZE_MODULES
+horizon-mod-wasm native_and_wasm_execute_identical_job_and_fail_closed_on_trap wasm-mods.yml manual # needs HORIZON_WASM_FIXTURE and HORIZON_WASM_STD, built by wasm-mods
 horizon-mod-wasm real_guest_point_is_refused_without_staging wasm-mods.yml manual # needs HORIZON_WASM_FIXTURE and HORIZON_WASM_STD, built by wasm-mods
 horizon-mod-wasm real_member wasm-mods.yml manual # needs HORIZON_WASM_FIXTURE and HORIZON_WASM_STD, which the wasm-mods workflow builds
 horizon-mod-wasm real_member_self_refusal wasm-mods.yml manual # needs HORIZON_WASM_FIXTURE and HORIZON_WASM_STD, built by wasm-mods

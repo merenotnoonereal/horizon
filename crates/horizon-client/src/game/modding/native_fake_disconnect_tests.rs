@@ -2,6 +2,7 @@
 
 use super::native_guest_turn_tests::with_guests;
 use horizon_client::lan::{Out, PlayerSender};
+use horizon_core::nbt::Tag;
 use horizon_protocol::{buf::Reader, packets::play::Clientbound};
 use mod_api::{
     Hooks, ModEntry, Mods, PlayerKickedEvent, PlayerLoggedOutEvent, PlayerRef, ServerHost, Text,
@@ -49,6 +50,7 @@ fn listen(game: &mut super::Game<'_>, conn: u32) -> Receiver<Out> {
 }
 
 fn leave_lines(rx: &Receiver<Out>) -> Vec<String> {
+    let lang = [("multiplayer.player.left".into(), "%s left the game".into())].into();
     rx.try_iter()
         .flat_map(|out| match out {
             Out::Packet(body) => vec![body],
@@ -62,8 +64,14 @@ fn leave_lines(rx: &Receiver<Out>) -> Vec<String> {
             let Clientbound::SystemChat(chat) = Clientbound::decode(id, reader.rest()).ok()? else {
                 return None;
             };
-            let text = horizon_protocol::text::plain(&chat.content, &Default::default());
-            text.contains("multiplayer.player.left").then_some(text)
+            let Tag::Compound(component) = &chat.content else {
+                return None;
+            };
+            let Some(Tag::String(key)) = component.get(&"translate".into()) else {
+                return None;
+            };
+            (key.to_string_lossy() == "multiplayer.player.left")
+                .then(|| horizon_protocol::text::plain(&chat.content, &lang))
         })
         .collect()
 }
@@ -123,6 +131,10 @@ fn fake_kicks_leave_once_with_the_first_reason() {
 
                 game.level_pass = Default::default();
                 game.tick_lan_packets();
+                // Packet draining holds sends until the full tick's flush boundary.
+                horizon_client::lan::flush_all(
+                    game.lan.as_ref().unwrap().hub.guests.iter().map(|g| &g.sender),
+                );
                 let host = game.lan.as_ref().unwrap();
                 assert!(host.hub.guest(conn).is_none());
                 assert!(host.hub.guests.iter().all(|guest| guest.uuid != 100));
@@ -133,7 +145,7 @@ fn fake_kicks_leave_once_with_the_first_reason() {
                 for observer in &observers {
                     let lines = leave_lines(observer);
                     assert_eq!(lines.len(), 1, "{path}: {lines:?}");
-                    assert!(lines[0].contains("robot"));
+                    assert_eq!(lines[0], "robot left the game");
                 }
 
                 assert!(
@@ -143,6 +155,10 @@ fn fake_kicks_leave_once_with_the_first_reason() {
                 );
                 game.level_pass = Default::default();
                 game.tick_lan_packets();
+                // Packet draining holds sends until the full tick's flush boundary.
+                horizon_client::lan::flush_all(
+                    game.lan.as_ref().unwrap().hub.guests.iter().map(|g| &g.sender),
+                );
                 assert_eq!(*notices.kicked.lock().unwrap(), ["First reason"]);
                 assert_eq!(*notices.logged_out.lock().unwrap(), [100]);
                 for observer in &observers {

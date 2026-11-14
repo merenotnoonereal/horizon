@@ -175,8 +175,19 @@ impl Hub {
             seed,
         );
         self.broadcast_near(sound.position, range, &packet, except);
+        // Wrapped for the level's viewers too: one bound to an entity for those tracking it.
+        let emitter = sound.entity.map(|id| id as i32);
+        self.send_viewed_sound(
+            &self.config.dimension,
+            sound.position,
+            range,
+            emitter,
+            || packet.encode(),
+        );
     }
 
+    /// `Level.playSound` at `at` for the players within range in the level in place, and wrapped
+    /// for the clients that view it there (`send_viewed_sound`).
     pub fn sound(
         &self,
         name: &str,
@@ -189,7 +200,9 @@ impl Hub {
         // Level.playSound: soundSeedGenerator.nextLong per call, not the tick.
         let seed = self.next_sound_seed();
         let packet = self.sound_packet(name, at, volume, pitch, source, seed);
-        self.broadcast_near(at, f64::from(volume.max(1.0)) * 16.0, &packet, except);
+        let range = f64::from(volume.max(1.0)) * 16.0;
+        self.broadcast_near(at, range, &packet, except);
+        self.send_viewed_sound(&self.config.dimension, at, range, None, || packet.encode());
     }
 
     /// ClientboundLevelEventPacket (block break particles and sounds ...); wrapped, to the

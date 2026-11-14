@@ -252,7 +252,6 @@ impl ViewedWorlds {
             .map(|w| &w.world)
     }
     /// The world of `level`, if the server opened it.
-    #[cfg(test)]
     pub(in crate::game) fn get(&self, level: i32) -> Option<&ViewedWorld> {
         self.worlds.get(&level)
     }

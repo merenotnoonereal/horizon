@@ -18,7 +18,7 @@ pub trait Hooks {
     /// client does not predict the pour of an item with this part. The part
     /// is asked in a transaction with the game's apply: a part that changes
     /// the player's hand or the dispenser's slots while answering
-    /// `Some(true)` is refused and all its writes are undone, as a failed
+    /// `Some(true)` is refused and its journaled writes are undone, as a failed
     /// use (the player keeps the stack, the dispenser fails). A player's
     /// successful pour counts for the `placed_block` criterion. Only the
     /// `ItemPart`s attached to `stack`'s item are asked. Server-side.

@@ -28,8 +28,12 @@ const SLOT_GROUPS: [&str; 11] = [
 ];
 
 /// `ItemAttributeModifiers.ATTRIBUTE_MODIFIER_FORMAT`, `DecimalFormat("#.##")`
-/// of a positive amount (half-even on the exact value).
+/// of a positive amount (half-even on the exact value). Infinity reads as the
+/// infinity sign, NaN as `NaN`, and a negative that rounds to zero keeps its sign.
 fn format_amount(value: f64) -> String {
+    if value.is_infinite() {
+        return if value > 0.0 { "\u{221e}" } else { "-\u{221e}" }.to_owned();
+    }
     let text = format!("{:.2}", value);
     text.trim_end_matches('0').trim_end_matches('.').to_owned()
 }
@@ -78,6 +82,9 @@ fn modifier_line(
         ("plus", amount * scale)
     } else if amount < 0.0 {
         ("take", -amount * scale)
+    } else if amount.is_nan() {
+        // A NaN modifier uses the decrease layout, whose key carries the minus.
+        ("take", amount)
     } else {
         return None;
     };
@@ -2080,6 +2087,66 @@ mod tests {
         assert_eq!(format_amount(2.8200000524520874), "2.82");
         assert_eq!(format_amount(0.125), "0.12");
         assert_eq!(format_amount(0.375), "0.38");
+    }
+
+    #[test]
+    fn extreme_amounts_print_as_the_reference_does() {
+        let lang = |k: &str| {
+            Some(
+                match k {
+                    "attribute.modifier.plus.0" => "+%s %s",
+                    "attribute.modifier.take.0" => "-%s %s",
+                    "attribute.modifier.equals.0" => "%s %s",
+                    "attribute.modifier.plus.1" => "+%s%% %s",
+                    "attribute.modifier.take.1" => "-%s%% %s",
+                    "attribute.modifier.equals.1" => "%s%% %s",
+                    "attribute.name.armor" => "Armor",
+                    "attribute.name.speed" => "Speed",
+                    _ => return None,
+                }
+                .to_owned(),
+            )
+        };
+        let line = |attribute, amount, total, display| {
+            modifier_line(&lang, attribute, amount, 0, total, display)
+        };
+        let plain = |amount, total| line("armor", amount, total, Display::Ranged);
+        let percent = |amount, total| line("speed", amount, total, Display::Percentage);
+        let cases = [
+            (f64::INFINITY, false, "+\u{221e} Armor", "+\u{221e}% Speed"),
+            (
+                f64::NEG_INFINITY,
+                false,
+                "-\u{221e} Armor",
+                "-\u{221e}% Speed",
+            ),
+            (f64::INFINITY, true, "\u{221e} Armor", "\u{221e}% Speed"),
+            (
+                f64::NEG_INFINITY,
+                true,
+                "-\u{221e} Armor",
+                "-\u{221e}% Speed",
+            ),
+            (f64::NAN, false, "-NaN Armor", "-NaN% Speed"),
+            (f64::NAN, true, "NaN Armor", "NaN% Speed"),
+            (-0.001, true, "-0 Armor", "-0.1% Speed"),
+            (-0.00001, true, "-0 Armor", "-0% Speed"),
+            (-0.0, true, "-0 Armor", "-0% Speed"),
+        ];
+        for (amount, total, want_plain, want_percent) in cases {
+            assert_eq!(
+                plain(amount, total).as_deref(),
+                Some(want_plain),
+                "{amount} {total}"
+            );
+            assert_eq!(
+                percent(amount, total).as_deref(),
+                Some(want_percent),
+                "{amount} {total}"
+            );
+        }
+        // A zero amount, either sign, is no line when it is not a total.
+        assert_eq!(plain(-0.0, false), None);
     }
 
     #[test]

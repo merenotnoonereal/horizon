@@ -242,6 +242,7 @@ pub(in crate::game) mod tests {
         times: Vec<i64>,
         /// The other packets of its runs, in order.
         others: Vec<C>,
+        sounds: Vec<horizon_protocol::packets::play::Sound>,
     }
 
     pub(in crate::game) fn sent(rx: &std::sync::mpsc::Receiver<horizon_client::lan::Out>) -> Sent {
@@ -271,6 +272,7 @@ pub(in crate::game) mod tests {
                             Ok(C::SetTime(t)) if t.clocks.is_empty() => {
                                 sent.times.push(t.game_time)
                             }
+                            Ok(C::Sound(p)) => sent.sounds.push(p),
                             Ok(other) => sent.others.push(other),
                             Err(_) => {}
                         }
@@ -791,5 +793,63 @@ pub(in crate::game) mod tests {
         }
         let told = clocks_after(&mut game, &rx, "gamerule advance_time false");
         assert!(told[0].iter().any(|&(_, rate)| rate == 0.0), "{told:?}");
+    }
+
+    /// A mod's sound in the Nether, a level nobody is in, reaches the viewer whose client holds
+    /// its chunk, wrapped, through `tick_server` (#3983).
+    #[test]
+    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES and a scratch HORIZON_HOME"]
+    fn a_sound_in_a_viewed_level_reaches_its_viewer_through_tick_server() {
+        let mut resources = None;
+        let (mut game, rx, all) = stream_the_nether(&mut resources, "view-pass-sound");
+        assert_eq!(all.chunks, square());
+        assert!(all.sounds.is_empty());
+        // A mod's handle needs the world's epoch, which this test world never began.
+        game.native_lifecycle
+            .begin_open(mod_api::Authority::IntegratedServer);
+        let nether = game.level(Dim::Nether.id()).unwrap();
+        let blocks = mod_api::SoundSource::Blocks;
+        let at = [648.5, 70.0, 650.25];
+        assert!(game.level_play_sound(nether, "minecraft:block.bell.use", at, blocks, 1.0, 0.75));
+        game.tick_server(false).unwrap();
+        let sounds = sent(&rx).sounds;
+        assert_eq!(sounds.len(), 1, "{sounds:?}");
+        let sound = &sounds[0];
+        assert_eq!((sound.x, sound.y, sound.z), (5188, 560, 5202));
+        assert_eq!((sound.source, sound.volume, sound.pitch), (4, 1.0, 0.75));
+    }
+
+    /// A mod's sound bound to a pig in the viewed Nether reaches the viewer whose view tracks the
+    /// pig, wrapped, bound to the same entity, through `tick_server` (#3983).
+    #[test]
+    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES and a scratch HORIZON_HOME"]
+    fn a_sound_bound_to_a_viewed_entity_reaches_the_view_tracking_it() {
+        let mut resources = None;
+        let (mut game, rx, _) = stream_the_nether(&mut resources, "view-pass-bound-sound");
+        let pig = summon_in_the_nether(&mut game, "minecraft:pig");
+        for _ in 0..60 {
+            game.tick_server(false).unwrap();
+        }
+        let _ = sent(&rx);
+        let tracks = |game: &Game<'_>| {
+            let view = viewer(game).viewed.view(Dim::Nether.id()).unwrap();
+            view.tracker.is_tracking(pig)
+        };
+        assert!(tracks(&game), "the view tracks the pig");
+        game.enter_level(Dim::Nether).unwrap();
+        game.native_lifecycle
+            .begin_open(mod_api::Authority::IntegratedServer);
+        let emitter = game.entity(pig as u32).unwrap();
+        let neutral = mod_api::SoundSource::Neutral;
+        let sound = "minecraft:entity.pig.ambient";
+        assert!(game.entity_play_bound_sound(emitter, sound, neutral, 1.0, 1.25));
+        game.tick_server(false).unwrap();
+        let bound: Vec<_> = (sent(&rx).others.into_iter())
+            .filter_map(|p| match p {
+                C::SoundEntity(p) => Some((p.id, p.source, p.volume, p.pitch)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(bound, [(pig, 6, 1.0, 1.25)]);
     }
 }

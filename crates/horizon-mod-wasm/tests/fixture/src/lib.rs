@@ -14,6 +14,7 @@ pub mod interaction;
 pub mod lending;
 pub mod matrix;
 pub mod movement;
+pub mod part_state;
 pub mod projectile_owner;
 pub mod replace;
 pub mod runtime_environment;
@@ -275,6 +276,10 @@ impl Hooks for Mod {
         mod_api::Flow::Continue
     }
 
+    fn blocks(&self, _: &mod_api::RegistrationContext, event: &mut mod_api::BlocksEvent<'_>) {
+        part_state::blocks(event);
+    }
+
     fn register(&self, registrar: &mut dyn mod_api::Registrar, cx: &mod_api::RegistrationContext) {
         runtime_environment::register(cx);
         capability_registration::register(registrar, cx);
@@ -282,6 +287,7 @@ impl Hooks for Mod {
         interaction::register(registrar);
         cauldron::register(registrar);
         tick_reply::register(registrar);
+        part_state::register(registrar);
         registrar.register_custom_stat("steps").unwrap();
         registrar
             .declare_datapack_registry(

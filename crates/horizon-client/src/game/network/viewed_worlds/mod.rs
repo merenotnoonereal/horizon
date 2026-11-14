@@ -4,6 +4,7 @@
 //! a `run`'s packets change that level's world and nothing of the player's own: its `World`,
 //! its renderer and its sounds stay as they are. A client mod reads a viewed level's blocks
 //! through `host.level` (gap 10, `modding/native_viewed_levels.rs`) and never writes it.
+//! A viewed level's sound plays only where a mod's `viewed_level_sound` puts it (`sounds`).
 //!
 //! The client views at most `viewed_levels_net::MAX_LEVELS` levels besides its own, the number
 //! its capability answer gives. A travel into one of them swaps it with the player's world
@@ -13,6 +14,7 @@
 //! player's own.
 mod entities;
 mod routing;
+mod sounds;
 mod switch;
 mod worlds;
 pub(in crate::game) use worlds::ViewedWorlds;
@@ -20,6 +22,7 @@ pub(in crate::game) use worlds::ViewedWorlds;
 #[cfg(test)]
 pub(in crate::game) mod tests {
     use super::routing::RouteError;
+    use super::sounds::{ViewedPlay, ViewedSound};
     use crate::game::{Game, game_tests::tests::server_game};
     use horizon_protocol::{
         buf::Reader,
@@ -28,6 +31,8 @@ pub(in crate::game) mod tests {
         viewed_levels,
     };
     use horizon_world::registry::BlockStateId;
+    use mod_api::SoundSource;
+    use std::sync::{Arc, Mutex};
 
     pub(super) const STONE: BlockStateId = BlockStateId(1);
     pub(super) const AIR: BlockStateId = BlockStateId(0);
@@ -334,5 +339,231 @@ pub(in crate::game) mod tests {
         }))
         .unwrap();
         assert_eq!(game.remote.as_ref().unwrap().viewed.len(), 0);
+    }
+
+    /// A sound of `name` at fixed-point `pos` (eighths of a block), in the blocks' source.
+    fn sound(name: &str, pos: [i32; 3], volume: f32, pitch: f32, seed: i64) -> C {
+        C::Sound(play::Sound {
+            sound: (-1, Some((name.into(), None))),
+            source: SoundSource::Blocks.index() as i32,
+            x: pos[0],
+            y: pos[1],
+            z: pos[2],
+            volume,
+            pitch,
+            seed,
+        })
+    }
+
+    /// What `viewed_level_sound` was asked: the level's name, the sound, its source, position,
+    /// volume, pitch and seed.
+    type Asked = (
+        Option<&'static str>,
+        String,
+        SoundSource,
+        [f64; 3],
+        f32,
+        f32,
+        i64,
+    );
+
+    /// Plays the anvil at (1.5, 70, -2.5) with volume 0.25 and pitch 1.5, leaves the bell
+    /// unplayed and puts the harp at a position that is not finite; logs what it was asked.
+    struct Portal(Arc<Mutex<Vec<Asked>>>);
+    #[mod_api::__subscriptions]
+    impl mod_api::Hooks for Portal {
+        fn viewed_level_sound(
+            &self,
+            _: &mut dyn mod_api::ClientHost,
+            e: &mut mod_api::ViewedLevelSoundEvent<'_>,
+        ) {
+            let sound = e.sound.to_string();
+            self.0.lock().unwrap().push((
+                mod_api::__private::dimension_id(e.level.dimension()),
+                sound.clone(),
+                e.source,
+                e.position,
+                e.volume,
+                e.pitch,
+                e.seed,
+            ));
+            match sound.as_str() {
+                "minecraft:block.anvil.land" => {
+                    *e.play_at = Some([1.5, 70.0, -2.5]);
+                    (e.volume, e.pitch) = (0.25, 1.5);
+                }
+                "minecraft:block.note_block.harp" => *e.play_at = Some([f64::NAN, 70.0, 0.0]),
+                _ => {}
+            }
+        }
+    }
+
+    /// A viewed level's sound asks `viewed_level_sound` with the viewed level's handle, the
+    /// sound's position there and the server's seed, and plays where the listener put it, with
+    /// the listener's volume and pitch and the same seed. Left None, or put at a position that
+    /// is not finite, it plays nothing. One bound to an entity of the viewed level is asked at that
+    /// entity. A sound of the player's own level does not ask it.
+    #[test]
+    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    fn a_viewed_sound_plays_where_a_listener_puts_it() {
+        let asked = Arc::default();
+        let mods = vec![mod_api::ModEntry::new(
+            "portal",
+            Box::new(Portal(Arc::clone(&asked))),
+        )]
+        .into();
+        mod_platform::testing::with_mods(mods, || {
+            let mut resources = None;
+            let mut game = client(&mut resources);
+            game.handle_packet(open(1, "minecraft:the_nether")).unwrap();
+            game.audio.capture = Some(Vec::new());
+            let anvil = sound("minecraft:block.anvil.land", [452, 512, 66], 2.0, 0.5, 42);
+            game.handle_packet(run(1, std::slice::from_ref(&anvil)))
+                .unwrap();
+            let played = game.audio.capture.replace(Vec::new()).unwrap();
+            assert_eq!(played.len(), 1);
+            assert_eq!(played[0].event, "minecraft:block.anvil.land");
+            assert_eq!(played[0].position, [1.5, 70.0, -2.5]);
+            assert_eq!((played[0].volume, played[0].pitch), (0.25, 1.5));
+            assert_eq!(played[0].source, SoundSource::Blocks.index());
+            let C::Sound(p) = &anvil else { unreachable!() };
+            assert_eq!(
+                game.ask_viewed_level_sound(1, ViewedSound::at_position(p)),
+                Some(ViewedPlay {
+                    name: "minecraft:block.anvil.land".into(),
+                    source: SoundSource::Blocks,
+                    at: [1.5, 70.0, -2.5],
+                    volume: 0.25,
+                    pitch: 1.5,
+                    seed: 42,
+                }),
+                "the server's seed"
+            );
+            let bell = sound("minecraft:block.bell.use", [0, 512, 0], 1.0, 1.0, 5);
+            let harp = sound("minecraft:block.note_block.harp", [8, 512, 8], 1.0, 1.0, 6);
+            game.handle_packet(run(1, &[bell, harp])).unwrap();
+            let played = game.audio.capture.replace(Vec::new()).unwrap();
+            assert_eq!(played.len(), 0, "the bell left None, the harp not finite");
+            // Bound to entity 40 of the viewed level: asked at the entity there, played where
+            // the listener put it; bound to an entity the world does not hold, not asked.
+            let pig = C::AddEntity(play::AddEntity {
+                id: 40,
+                uuid: 40,
+                kind: 7,
+                position: [12.5, 70.0, -3.25],
+                velocity: [0.0; 3],
+                pitch: 0,
+                yaw: 0,
+                head_yaw: 0,
+                data: 0,
+            });
+            let bound = |id| {
+                C::SoundEntity(play::SoundEntity {
+                    sound: (-1, Some(("minecraft:block.anvil.land".into(), None))),
+                    source: SoundSource::Blocks.index() as i32,
+                    id,
+                    volume: 1.0,
+                    pitch: 1.0,
+                    seed: 9,
+                })
+            };
+            game.handle_packet(run(1, &[pig, bound(40), bound(41)]))
+                .unwrap();
+            let played = game.audio.capture.replace(Vec::new()).unwrap();
+            assert_eq!(played.len(), 1);
+            assert_eq!(played[0].position, [1.5, 70.0, -2.5]);
+            // The player's own level: played where it is, without asking.
+            game.handle_packet(sound(
+                "minecraft:block.anvil.land",
+                [8, 512, 8],
+                1.0,
+                1.0,
+                7,
+            ))
+            .unwrap();
+            let played = game.audio.capture.take().unwrap();
+            assert_eq!(played.len(), 1);
+            assert_eq!(played[0].position, [1.0, 64.0, 1.0]);
+            let nether = Some("minecraft:the_nether");
+            let blocks = SoundSource::Blocks;
+            let anvil = |volume| {
+                (
+                    nether,
+                    "minecraft:block.anvil.land".to_owned(),
+                    blocks,
+                    [56.5, 64.0, 8.25],
+                    volume,
+                    0.5,
+                    42,
+                )
+            };
+            assert_eq!(
+                *asked.lock().unwrap(),
+                [
+                    anvil(2.0),
+                    anvil(2.0),
+                    (
+                        nether,
+                        "minecraft:block.bell.use".into(),
+                        blocks,
+                        [0.0, 64.0, 0.0],
+                        1.0,
+                        1.0,
+                        5
+                    ),
+                    (
+                        nether,
+                        "minecraft:block.note_block.harp".into(),
+                        blocks,
+                        [1.0, 64.0, 1.0],
+                        1.0,
+                        1.0,
+                        6
+                    ),
+                    (
+                        nether,
+                        "minecraft:block.anvil.land".into(),
+                        blocks,
+                        [12.5, 70.0, -3.25],
+                        1.0,
+                        1.0,
+                        9
+                    ),
+                ]
+            );
+        });
+    }
+
+    /// With no listener a run of a viewed level's sounds, as the client's own decoder reads it,
+    /// costs one `listened` check, allocates nothing and plays nothing: both sounds carry their
+    /// event inline, which decoding them would allocate.
+    #[test]
+    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    fn with_no_listener_a_viewed_sound_is_dropped_after_one_check() {
+        let mut resources = None;
+        let mut game = client(&mut resources);
+        game.handle_packet(open(1, "minecraft:the_nether")).unwrap();
+        game.audio.capture = Some(Vec::new());
+        let anvil = sound("minecraft:block.anvil.land", [452, 512, 66], 2.0, 0.5, 42);
+        let bound = C::SoundEntity(play::SoundEntity {
+            sound: (-1, Some(("minecraft:block.bell.use".into(), None))),
+            source: SoundSource::Blocks.index() as i32,
+            id: 40,
+            volume: 1.0,
+            pitch: 1.0,
+            seed: 9,
+        });
+        let payload = run(1, &[anvil, bound]);
+        let checks = || super::sounds::LISTENED_CHECKS.with(std::cell::Cell::get);
+        let before = checks();
+        let (routed, allocations) =
+            horizon_threads::allocation_count::measure(|| game.route_viewed_levels(data(&payload)));
+        assert_eq!(routed, Ok(()));
+        assert_eq!(allocations, 0);
+        assert_eq!(checks() - before, 1);
+        assert_eq!(
+            game.audio.capture.take().map(|played| played.len()),
+            Some(0)
+        );
     }
 }

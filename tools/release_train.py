@@ -11,8 +11,9 @@ The game ships only the Nightly since 2026-10-28 (Ludovic): when `decide --kind 
 `nightly build` on the commit it decided (tools/ci/nightly.py), and "the last release" is the published Nightly.
 On the fork (CI tiers, owner 2026-11-13) `--channel` names the kind of build: `nightly` takes `daily-green` and
 refuses any other --head (an older commit had no daily run of its own, and no SDK); `snapshot` takes main's head (or
---head) and refuses a commit whose gate jobs (dyna-checks' main-push lint, verify, verify-static, launcher) did
-not pass.
+a --head on main) and refuses a commit whose gate jobs (dyna-checks' main-push lint, verify, verify-static, launcher)
+did not all pass (pending is not passed); otherwise it always builds, as snapshot-<date>-<short> (no batch rules,
+cap, pause or release-blocker: a snapshot is for testing main, never for players).
 
 A kind releases when a pull request merged into main since its last published release changed one of its
 player-facing paths (GAME_PATHS, LAUNCHER_PATHS), once BATCH of them are waiting and the newest merged at least
@@ -472,12 +473,18 @@ def published_nightly():
     return json.loads(out) if out.strip() else None
 
 
+SNAPSHOT_RUN = "snapshot build"
+
+
 def nightly_building():
-    """The run of `nightly build` under way or waiting, if any: the train starts no second one."""
-    runs = gh_json("run", "list", "--repo", REPO, "--workflow", NIGHTLY_WORKFLOW, "--limit", "10",
-                   "--json", "databaseId,status")
-    return next((entry["databaseId"] for entry in runs if entry["status"] in ("queued", "in_progress", "waiting",
-                                                                              "pending", "requested")), None)
+    """The Nightly's run of `nightly build` under way or waiting, if any: the train starts no second one. A
+    snapshot's run (named `snapshot build <commit>` by nightly-build.yml's run-name) has its own concurrency group
+    and never holds a Nightly back; every other run of the workflow is a Nightly's."""
+    runs = gh_json("run", "list", "--repo", REPO, "--workflow", NIGHTLY_WORKFLOW, "--limit", "20",
+                   "--json", "databaseId,status,displayTitle")
+    return next((entry["databaseId"] for entry in runs
+                 if entry["status"] in ("queued", "in_progress", "waiting", "pending", "requested")
+                 and entry["displayTitle"].split(" ", 2)[:2] != SNAPSHOT_RUN.split()), None)
 
 
 def nightly_builds_today(today):
@@ -576,11 +583,22 @@ def channel_head(channel, head):
             raise SystemExit(f"::error::refused: {head} is not the commit `{DAILY_GREEN}` points to ({green}); "
                              "a nightly ships only the commit of the newest fully green daily run, with its SDK")
         return sha
-    sha = head or run("git", "rev-parse", "refs/remotes/origin/main").strip()
+    sha = run("git", "rev-parse", "--verify", "--quiet", f"{head or 'refs/remotes/origin/main'}^{{commit}}",
+              check=False).strip()
+    if not sha:
+        raise SystemExit(f"::error::refused: {head} is not a commit of this repository")
+    if subprocess.run(["git", "merge-base", "--is-ancestor", sha, "refs/remotes/origin/main"], cwd=ROOT).returncode:
+        raise SystemExit(f"::error::refused: {sha} is not on main; a snapshot builds only a commit of main")
     if not fork_gate_passed(sha):
         raise SystemExit(f"::error::refused: dyna-checks' gate jobs ({', '.join(sorted(SNAPSHOT_GATE))}) "
                          f"did not all pass on a main push of {sha}; a snapshot needs the gate green on its commit")
     return sha
+
+
+def build_tag(channel, date, sha):
+    """A build's tag and the version it installs as: `nightly-<date>-<short>` or `snapshot-<date>-<short>`
+    (horizon_release_sign::Channel parses it; the launcher installs under it)."""
+    return f"{channel}-{date}-{sha[:7]}"
 
 
 def green_main_head(parity=False, eligible=None):
@@ -671,6 +689,15 @@ def main():
         write_outputs({"release": "false", "reason": result["reason"]})
         return 0
     head = run("git", "rev-parse", head).strip()
+    if args.channel == "snapshot" and args.command == "decide":
+        # A snapshot is for testing a commit of main, never for players: the gate on its commit is its only rule (no
+        # batch, cap, pause or release-blocker), and its tag is its own (never `nightly`).
+        tag = build_tag("snapshot", now.date().isoformat(), head)
+        result = {"release": True, "reason": f"the gate passed on {head[:9]}: snapshot {tag}", "tag": tag,
+                  "head": head, "urgent": False}
+        print(json.dumps(result, indent=1))
+        write_outputs({"release": "true", "reason": result["reason"], "tag": tag, "head": head, "urgent": "false"})
+        return 0
     nightly = published_nightly() if args.kind == "game" else None
     if nightly:
         run("git", "fetch", "--quiet", "--force", "origin", "refs/tags/nightly:refs/tags/nightly")

@@ -9,13 +9,14 @@
 //! for spawning, sleeping, raids or any other rule. A client whose capability answer allows it is
 //! sent the areas of the levels it is not in, each packet wrapped with its level (`send`), and
 //! the entities there (`entities`). A travel into a level its client views swaps that level with
-//! the one it leaves (`switch`).
+//! the one it leaves (`switch`). From revision 2 their sounds go too (`sounds`).
 //!
 //! With no area on the server, a level pass costs one integer compare ([`ViewedLevels::active`]).
 pub mod areas;
 pub mod capability;
 pub(super) mod entities;
 pub(super) mod send;
+mod sounds;
 mod switch;
 #[cfg(test)]
 mod tests;

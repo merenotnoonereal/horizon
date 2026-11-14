@@ -18,9 +18,20 @@ cargo horizon-mod check target/horizon-mod/my_mod.hmod   # the registry's checks
 ```
 
 - `new <path> [--name "Name"]` writes the content template. `--template native` writes
-  a flat native mod instead: `horizon-mod.toml` with `[native]` pinned to the newest prebuilt game's commit (or
-  `--horizon <commit>`'s) so the launcher downloads the game instead of building it, root `Cargo.toml`
-  and `src/lib.rs`, and empty `assets/` and `data/` directories. `update` repins it the same way. Its root `impl Hooks` uses
+  a flat native mod instead, and `--template wasm` a wasm one: `horizon-mod.toml`, root `Cargo.toml`
+  and `src/lib.rs`, and empty `assets/` and `data/` directories. The mod is pinned to the build of the current
+  Nightly (players have it), or to `--horizon`'s: `nightly-<YYYY-MM-DD>`, or a commit sha (7 hex digits are enough when
+  they name one build). A native mod pins it in `[native] horizon`, a wasm mod in `Cargo.toml`'s
+  `[package.metadata.horizon] sdk`. `Cargo.toml` names the API by path,
+  `horizon-mod-api = { path = ".horizon/sdk/api/crates/horizon-mod-api" }`, the only form the tool and the launcher
+  take. Every other form is refused under `E_SDK_SOURCE`, naming why: the old git form, a version alone (Cargo
+  would take the crate from crates.io, where anyone can publish its name), another source, or another path. `new` fetches that build's SDK into `.horizon/sdk/`,
+  and every command that compiles the mod fetches it again when it is missing or another build's, so a fresh clone
+  works after one command; your editor needs that first command too. `.horizon/` is in the template's `.gitignore`
+  and is never packed. The fetch checks Horizon's signature on the release and every file against its `sdk.json`;
+  `HORIZON_SDK_BASE` (a URL or a folder) reads the releases from a mirror instead. When that Nightly has no SDK,
+  `new` says so and asks for `--horizon`. `update` repins a native mod the same way
+  ([the SDK in a mod project](../reference/sdk/03-in-a-project.md)). Its root `impl Hooks` uses
   `#[mod_api::horizon_mod]`. Compile it with `horizon-launcher native-build <path> --trust-native-code`
   ([writing hooks](../start/writing-hooks.md)). Any other `--template` is refused.
 - `build` packs the checked project into `target/horizon-mod/<id>.hmod`: `horizon-mod.toml`, `assets/`,
@@ -585,8 +596,15 @@ admission errors name the file. Radius 0 disables its shadow. Radius follows `mi
 baby age scaling and the template's extra baby factors; cube sizes, pufferfish and dragon retain
 their renderer rules. The usual visibility, 32-block radius cap and distance fade still apply.
 
-A living type copies a mob, `minecraft:zombie` or `minecraft:villager`, the way NeoForge's
-`EntityType.Builder.of(Zombie::new, ...)` makes a type of a vanilla class. It has no `item` or `damage`. `attributes`
+A living type copies a mob, the way NeoForge's `EntityType.Builder.of(Zombie::new, ...)` makes a type of a vanilla
+class: `minecraft:zombie`, `minecraft:villager`, `minecraft:wandering_trader`, or one of the tameable mobs
+(`TamableAnimal`), `minecraft:wolf`, `minecraft:cat` and `minecraft:parrot`. A tameable type tames with its template's
+item, then sits, follows and teleports to its owner, and fights for it, as its template does. Its owner, sitting state
+and its template's own fields (a wolf's collar, a cat's or a parrot's variant) save and load under the type's id. A
+tamed wolf type's hits are its owner's, as a wolf's are. A parrot type rides a player's shoulder and comes back off
+as itself; drawing it there is its mod's (an [entity layer](client/entity-layers.md)), as vanilla draws only its own
+parrot there. Every living type is tracked to clients as far, and as often, as its template. It has no `item` or
+`damage`. `attributes`
 sets default attribute values that differ from its template's (`EntityAttributeCreationEvent`), by attribute id, and
 only for attributes the template has; one it lacks stops the content root's build:
 

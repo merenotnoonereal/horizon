@@ -649,6 +649,12 @@ pub trait LevelAccess: BlockEntityNeighbors {
     /// (`updatePOIOnBlockStateChange`), after the client update, the neighbour updates and the
     /// neighbours' shape updates. A write whose `on_place` replaced the block is not observed.
     fn observe_block_state_change(&self, _pos: BlockPos, _old: BlockStateId, _new: BlockStateId) {}
+    /// Whether `observe_block_state_change` would hear a change from `old` to `new`; a write
+    /// inside a running neighbour update queues its notice only when this is true. The
+    /// default hears nothing.
+    fn observes_block_state_change(&self, _old: BlockStateId, _new: BlockStateId) -> bool {
+        false
+    }
     /// NeoForge's `NeighborNotifyEvent`: the block at `pos` is about to tell
     /// its neighbours it changed (`ServerLevel.updateNeighborsAt`, or
     /// `updateNeighborsAtExceptFromFacing` with the side it skips). True

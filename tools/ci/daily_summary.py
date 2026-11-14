@@ -7,11 +7,18 @@ files (tools/ci/ignored_tests.py --report: test identity, kind, panic location, 
 - a failing test: files `Daily: <crate> <test>` (label `bug`) with its panic location, this run as the first that
   saw it and the pull requests merged since the last green daily as suspects, or comments on the open one;
 - a leg that failed without a test name (build error, timeout, killed, cancelled, skipped, or a leg with no
-  sanitised verdict): one issue per leg, `Daily: <leg> did not complete`, naming the failed steps;
+  sanitised verdict): one issue per leg, `Daily: <leg> did not complete`, naming the failed steps and, for a shard,
+  why each run stopped as its verdict file says (signal or exit status, memory peak and limit, wall time, the tests
+  still running past 60 s; stopped_text); a leg whose red asks for an action is titled as that action (ACTIONS:
+  `Daily: update the machine sample for the mod API change`);
 - a test (or leg) green again: closes its open issue with a comment.
-A job it does not know, or an expected leg with no job, is a red leg ("did not report"), never green. Each comment
+A job it does not know, or an expected leg with no job, is a red leg ("did not report"), never green; so is a
+shard of the matrix (tools/ci/ignored_shards.py, which builds it) with no job of its name. Each comment
 names this run's URL, and none is posted twice for one run (a rerun of failed jobs, or a retry after a partial
 write, completes what is missing). `daily_summary.py --seen SHA` prints a completed real daily run of SHA, if any.
+`daily_summary.py --after JOB RESULT` reports a job that runs after the summary (the SDK's publish, `sdk-publish`) the
+same way: not `success` files or comments on `Daily: JOB did not complete`, naming its failed steps; `success` closes
+it.
 Only a run on refs/heads/main with DRY_RUN=false writes; otherwise it prints what it would do to the job summary.
 Lookups come first and fail the job on any API error (a rate limit included), so a failed lookup never files
 duplicates.
@@ -30,17 +37,27 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
+sys.path.append(str(Path(__file__).resolve().parents[2]))
+from tools.ci import ignored_shards  # noqa: E402
+
 TAG = "daily-green"
 LABEL = "bug"
 PREFIX = "Daily: "
 UNFINISHED = " did not complete"
 DISCLOSURE = "> 🤖 Filed by Aria's agent swarm, Dyna, not by Aria."
 # daily.yml's leg jobs (each a called workflow), and the called workflows' own routing jobs, which test nothing.
-LEGS = ("shards", "wasm-mods", "fn-replace-check", "linkage", "windows-runtime-leases", "sdk")
+LEGS = ("shards", "wasm-mods", "fn-replace-check", "linkage", "windows-runtime-leases", "machine-sample", "sdk")
+# Legs whose red is an action for someone, not a break: their one issue is titled as the action, and says what to do.
+ACTIONS = {
+    "machine-sample": ("update the machine sample for the mod API change",
+                       "arismoko/horizon-machine-sample, at the pin in `tools/ci/check_machine_sample.py`, no longer "
+                       "builds against this commit's mod API. Update the sample for the API change, then move the pin "
+                       "to the updated sample in a pull request here."),
+}
 HELPERS = ("plan", "route", "fresh", "gate")
 # Jobs of a called workflow that the daily run does not use: launcher-windows-check's push and pull-request tests.
 NOT_DAILY = ("windows-runtime-leases / test",)
-# The one green skip: the SDK build skips when prebuilt-<sha> already exists, which `sdk / fresh` found (it
+# The one green skip: the SDK build skips when sdk-<sha> already exists, which `sdk / fresh` found (it
 # succeeded). Any other skip of an expected job is red.
 FRESH = "sdk / fresh"
 # The wasm fixture step whose failures its verdict file names test by test.
@@ -85,6 +102,13 @@ def leg_jobs(jobs):
             and job["name"].split(" / ", 1)[1] not in HELPERS and job["name"] not in NOT_DAILY]
 
 
+def expected_shards():
+    """The `shards` leg's matrix jobs the daily run must have, from the matrix's own source
+    (tools/ci/ignored_shards.py --matrix --all): every package shard and every daily-rows leg."""
+    return [f"shards / ignored-tests-shards ({shard})"
+            for shard in [*ignored_shards.expand(ignored_shards.SHARDS), *ignored_shards.DAILY_ROWS_LEGS.values()]]
+
+
 def job_green(job, fresh_ok):
     return job["conclusion"] == "success" or (
         job["conclusion"] == "skipped" and job["name"].startswith("sdk / ") and fresh_ok)
@@ -118,8 +142,59 @@ def report_for(job, reports):
 
 def known(name):
     """daily.yml's own jobs and its legs' jobs; any other job is one the summary cannot judge."""
-    return (name in ("resolve", "schedule-dispatch", "sdk-publish") or name.startswith(("summary ", "nightly / "))
+    return (name in ("resolve", "schedule-dispatch", "sdk-publish-report")
+            or name.startswith(("summary ", "nightly / ", "sdk-publish / "))
             or name.split(" / ", 1)[0] in LEGS and " / " in name)
+
+
+# A run's name and a test's name as ignored_tests.py writes them; anything else in a report is not shown.
+SHARD_NAME = re.compile(r"[\w#:.-]{1,200}")
+TEST_NAME = re.compile(r"(?=.{1,300}$)(?:r#)?[^\W\d]\w*(?:::(?:r#)?[^\W\d]\w*)*")
+STILL_RUNNING_SHOWN = 5
+
+
+def number(value):
+    return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else None
+
+
+def gib(size):
+    return f"{size / 1024 ** 3:.1f} GiB"
+
+
+def stopped_text(entry):
+    """Why one run of a shard did not complete (ignored_tests.py's report: names and numbers only), as one sentence:
+    "`horizon-client#1of2` killed by signal 9 (SIGKILL), out of memory (1 kill); memory peak 32.0 GiB of 32.0 GiB;
+    after 70 min; still running: `a::b`". Unknown fields are left out, never guessed."""
+    shard = entry.get("shard")
+    name = f"`{shard}`" if isinstance(shard, str) and SHARD_NAME.fullmatch(shard) else "a run"
+    if entry.get("in_progress") is True:
+        return (f"{name} was still running when the leg ended (its time limit, a cancel, or a lost runner); which "
+                "tests were running and the process's end are not known")
+    parts = []
+    ended = entry.get("ended_by")
+    if isinstance(ended, str) and re.fullmatch(r"(?:signal|exit status) \d{1,5}(?: \(SIG[A-Z0-9]{1,10}\))?", ended):
+        parts.append(f"{name} killed by {ended}" if ended.startswith("signal") else f"{name} ended with {ended}")
+    else:
+        reason = entry.get("reason")
+        parts.append(f"{name}: {reason}" if isinstance(reason, str) and re.fullmatch(r"[a-z ()]{1,120}", reason)
+                     else f"{name} did not complete")
+        if (code := number(entry.get("cargo_exit"))) is not None:
+            parts[-1] += f" (cargo exit {code})"
+    if kills := number(entry.get("oom_kills")):
+        parts[-1] += f", out of memory ({kills} kill{'s' if kills > 1 else ''} by the kernel)"
+    peak, limit = number(entry.get("memory_peak_bytes")), number(entry.get("memory_max_bytes"))
+    if peak is not None:
+        parts.append(f"job memory peak {gib(peak)}" + (f" of {gib(limit)}" if limit is not None else ""))
+    if (seconds := number(entry.get("wall_seconds"))) is not None:
+        parts.append(f"after {seconds // 60} min" if seconds >= 120 else f"after {seconds} s")
+    still = [test for test in entry.get("still_running") or () if isinstance(test, str) and TEST_NAME.fullmatch(test)]
+    if still:
+        more = len(still) - STILL_RUNNING_SHOWN + (number(entry.get("still_running_more")) or 0)
+        parts.append("still running past 60 s: " + ", ".join(f"`{test}`" for test in still[:STILL_RUNNING_SHOWN])
+                     + (f" and {more} more" if more > 0 else ""))
+    if never := number(entry.get("never_reported")):
+        parts.append(f"{never} listed test{'s' if never > 1 else ''} never reported")
+    return "; ".join(parts)
 
 
 def named(problem):
@@ -151,7 +226,9 @@ def verdicts(jobs, reports, results):
             if report is None:
                 unfinished.append((job["name"], job["conclusion"], steps, "no verdict file: the leg ended before its tests reported"))
             elif report["incomplete"] or len(by_name) < len(problems) or not problems:
-                reason = ("a test run did not complete" if report["incomplete"] else
+                reason = ("a test run did not complete: " + ". ".join(
+                    stopped_text(entry if isinstance(entry, dict) else {}) for entry in report["incomplete"])
+                          if report["incomplete"] else
                           "failed tests whose names are withheld" if problems else "failed outside its tests")
                 unfinished.append((job["name"], job["conclusion"], steps, reason))
         elif job["name"] == "wasm-mods / fixture" and steps == [FIXTURE_TESTS_STEP] and by_name:
@@ -161,6 +238,12 @@ def verdicts(jobs, reports, results):
     for job in jobs:
         if not known(job["name"]):
             unfinished.append((job["name"], job["conclusion"], [], "did not report: a job the summary does not know"))
+    names = {job["name"] for job in jobs}
+    if "shards" not in helpers:
+        for expected in expected_shards():
+            if expected not in names:
+                unfinished.append((expected, "missing", [], "did not report: the daily matrix has this shard, but "
+                                   "no job of that name ran"))
     seen = {job["name"].split(" / ", 1)[0] for job in leg_jobs(jobs)}
     for leg in LEGS:
         result = results.get(leg, {}).get("result", "missing")
@@ -202,7 +285,8 @@ def test_title(item):
 
 
 def leg_title(leg):
-    return f"{PREFIX}{leg}{UNFINISHED}"
+    action = ACTIONS.get(leg.split(" / ", 1)[0])
+    return f"{PREFIX}{action[0]}" if action else f"{PREFIX}{leg}{UNFINISHED}"
 
 
 def detail(item):
@@ -218,7 +302,9 @@ def detail(item):
 
 def leg_detail(leg, conclusion, steps, reason):
     named_steps = ", ".join(f"`{step}`" for step in steps) or "none recorded"
-    return f"Leg `{leg}` ended `{conclusion}`: {reason}. Failed steps: {named_steps}."
+    action = ACTIONS.get(leg.split(" / ", 1)[0])
+    return ((f"{action[1]}\n\n" if action else "")
+            + f"Leg `{leg}` ended `{conclusion}`: {reason}. Failed steps: {named_steps}.")
 
 
 def plan(commit, run_url, tests, unfinished, passed, green_legs, green, open_issues, numbers):
@@ -247,7 +333,10 @@ def plan(commit, run_url, tests, unfinished, passed, green_legs, green, open_iss
         if title in filed:
             continue
         rest = title[len(PREFIX):]
-        if rest.endswith(UNFINISHED):
+        acted = [leg for leg, (action, _) in ACTIONS.items() if action == rest]
+        if acted:
+            back = acted[0] in green_legs or any(name.startswith(f"{acted[0]} / ") for name in green_legs)
+        elif rest.endswith(UNFINISHED):
             back = rest[:-len(UNFINISHED)] in green_legs
         else:
             package, _, test = rest.partition(" ")
@@ -345,6 +434,35 @@ def main(call=api, run_git=git):
     return 0
 
 
+def after(name, result, call=api, run_git=git):
+    """Reports the job `name` that ran after the summary, which concluded `result` (`needs.<name>.result`): one
+    issue for it while it fails, closed by its next success. Writes only where the summary would."""
+    env = os.environ
+    writes = env.get("GITHUB_REF") == "refs/heads/main" and env.get("DRY_RUN") == "false"
+    run_url = f"{env.get('GITHUB_SERVER_URL', 'https://github.com')}/{env['GITHUB_REPOSITORY']}/actions/runs/{env['GITHUB_RUN_ID']}"
+    commit = env["COMMIT"]
+    open_issues = {issue["title"]: issue["number"]
+                   for issue in pages(call, f"issues?state=open&labels={LABEL}")
+                   if "pull_request" not in issue and issue["title"] == leg_title(name)}
+    if result == "success":
+        actions = plan(commit, run_url, [], [], set(), {name}, False, open_issues, [])
+    else:
+        jobs = pages(call, f"actions/runs/{env['GITHUB_RUN_ID']}/jobs?filter=latest", "jobs")
+        steps = [f"{job['name']}: {step}" for job in jobs if job["name"].startswith(f"{name} / ")
+                 for step in failed_steps(job)]
+        unfinished = [(name, result, steps, "nothing was published, so no Nightly follows")]
+        actions = plan(commit, run_url, [], unfinished, set(), set(), False, open_issues,
+                       suspects(commit, run_git))
+    text = render(actions, writes)
+    print(text)
+    if env.get("GITHUB_STEP_SUMMARY"):
+        with open(env["GITHUB_STEP_SUMMARY"], "a") as summary:
+            summary.write(text)
+    if writes:
+        apply(actions, call, run_url)
+    return 0
+
+
 def seen(sha, call=api):
     """The URL of a completed real daily run of sha (its summary job, named `summary <sha>`, finished), or ""."""
     current = int(os.environ["GITHUB_RUN_ID"])
@@ -363,4 +481,6 @@ if __name__ == "__main__":
     if sys.argv[1:2] == ["--seen"]:
         print(seen(sys.argv[2]))
         sys.exit(0)
+    if sys.argv[1:2] == ["--after"]:
+        sys.exit(after(sys.argv[2], sys.argv[3]))
     sys.exit(main())

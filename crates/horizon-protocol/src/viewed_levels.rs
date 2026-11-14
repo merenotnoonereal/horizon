@@ -17,10 +17,10 @@
 //! |---|---|---|
 //! | 1 | Viewed levels, stages 9a–9d: channel and play payloads below | #3716 |
 //! | 2 ([`REVISION_2`]) | Switch into a viewed level on Respawn (keep 3), retaining the level left as viewed ([`Answer::switches`]) | #4004 |
+//! | 3 ([`REVISION_3`]) | Viewed levels' sounds ([`SOUNDS`], [`Answer::sounds`]) | #3983 |
 //!
-//! Pending sounds (#3983) and acts (#3982) each need their own next revision (3 and 4,
-//! in actual merge order), not revision 2. A new message kind is accepted only at its
-//! own revision or later; its decoder must land before any sender enables it.
+//! Pending acts (#3982) need revision 4, not revision 2 or 3. A new message kind is
+//! accepted only at its own revision or later; its decoder must land before any sender enables it.
 //!
 //! **Play** (clientbound only): the payload after the channel is a kind byte, then:
 //!
@@ -31,8 +31,9 @@
 //! | 2 `close` | VarInt level | Every chunk of the level was forgotten: the client drops the world. |
 //!
 //! The level is its index in the Login packet's `levels` list, never the player's own. Only the
-//! [`LEVEL_SCOPED`] kinds may be wrapped, and a run never mixes levels. A serverbound play payload
-//! on the channel is a protocol error (`custom_payload`'s codec refuses it).
+//! [`LEVEL_SCOPED`] kinds and, from revision 3, the [`SOUNDS`] may be wrapped, and a run never
+//! mixes levels. A serverbound play payload on the channel is a protocol error
+//! (`custom_payload`'s codec refuses it).
 use crate::{
     buf::{Codec, Reader, Writer},
     ids::play::clientbound as id,
@@ -44,8 +45,10 @@ pub const CHANNEL: &str = "horizon:levels";
 /// Revision 2 of the exchange: what a client of it does besides revision 1's is in the module's
 /// list of revisions.
 pub const REVISION_2: u8 = 2;
+/// Revision 3 of the exchange (#3983): see the module's list of revisions.
+pub const REVISION_3: u8 = 3;
 /// The capability exchange's revision this build asks and answers.
-pub const REVISION: u8 = REVISION_2;
+pub const REVISION: u8 = REVISION_3;
 /// The oldest revision a server serves.
 pub const OLDEST_REVISION: u8 = 1;
 
@@ -59,7 +62,7 @@ const CLOSE: u8 = 2;
 /// time and weather, and its entities. Two are narrowed further by their fields: `GameEvent` only
 /// for rain and thunder (events 1, 2, 7 and 8), `LevelEvent` only when not global. Never wrapped:
 /// anything about the player or the connection, chunk batches, the chunk cache centre and radius,
-/// global level events, chat, sounds and particles.
+/// global level events, chat, sounds (wrapped from revision 3: [`SOUNDS`]) and particles.
 pub const LEVEL_SCOPED: [i32; 30] = [
     id::LEVEL_CHUNK_WITH_LIGHT,
     id::FORGET_LEVEL_CHUNK,
@@ -92,6 +95,11 @@ pub const LEVEL_SCOPED: [i32; 30] = [
     id::UPDATE_MOB_EFFECT,
     id::REMOVE_MOB_EFFECT,
 ];
+
+/// The play clientbound packets a `run` may also carry from [`REVISION_3`] on: the level's sounds
+/// at a position and bound to an entity. A server sends them only to a client whose answer
+/// [`Answer::sounds`]; below that revision they are a protocol error.
+pub const SOUNDS: [i32; 2] = [id::SOUND, id::SOUND_ENTITY];
 
 /// `GameEvent`s about a level's weather: START_RAINING, STOP_RAINING, RAIN_LEVEL_CHANGE and
 /// THUNDER_LEVEL_CHANGE.
@@ -185,6 +193,10 @@ impl Answer {
     pub fn switches(self) -> bool {
         self.revision >= REVISION_2
     }
+    /// Whether the client may be sent its viewed levels' sounds ([`SOUNDS`], [`REVISION_3`]).
+    pub fn sounds(self) -> bool {
+        self.revision >= REVISION_3
+    }
 }
 
 /// Reads a client's answer. An answer of a revision outside [`OLDEST_REVISION`] to [`REVISION`]
@@ -220,8 +232,26 @@ pub enum Message<'a> {
 }
 
 impl<'a> Message<'a> {
-    /// Reads a play payload's data (after its channel).
+    /// Reads a play payload's data (after its channel), at this build's [`REVISION`].
     pub fn decode(data: &'a [u8]) -> Result<Self, ViewedLevelsError> {
+        Self::decode_in(data, REVISION)
+    }
+
+    /// Reads a play payload's data at `revision`: a kind that revision does not have, such as a
+    /// sound below [`REVISION_3`], is refused as not level-scoped.
+    pub fn decode_in(data: &'a [u8], revision: u8) -> Result<Self, ViewedLevelsError> {
+        Self::decode_with(data, revision, true)
+    }
+
+    /// [`Message::decode_in`], keeping a run's [`SOUNDS`] only when `sounds`: otherwise each one's
+    /// kind is checked against `revision` and its bytes are skipped unread, so a run of sounds
+    /// nobody hears decodes and allocates nothing. A run of only such sounds is not empty: it
+    /// comes back with no packet.
+    pub fn decode_with(
+        data: &'a [u8],
+        revision: u8,
+        sounds: bool,
+    ) -> Result<Self, ViewedLevelsError> {
         let mut r = Reader::new(data);
         let kind = r.u8()?;
         let level = r.varint()?;
@@ -232,16 +262,24 @@ impl<'a> Message<'a> {
             },
             RUN => {
                 let mut packets = Vec::new();
+                let mut entries = 0;
                 while r.remaining() > 0 {
                     let len =
                         usize::try_from(r.varint()?).map_err(|_| ViewedLevelsError::CutShort)?;
                     let mut entry = Reader::new(r.bytes(len)?);
                     let id = entry.varint()?;
                     let body = entry.rest();
-                    check_level_scoped(id, body)?;
+                    entries += 1;
+                    if !sounds && SOUNDS.contains(&id) {
+                        if revision < REVISION_3 {
+                            return Err(ViewedLevelsError::NotLevelScoped(id));
+                        }
+                        continue;
+                    }
+                    check_level_scoped(id, body, revision)?;
                     packets.push((id, body));
                 }
-                if packets.is_empty() {
+                if entries == 0 {
                     return Err(ViewedLevelsError::EmptyRun);
                 }
                 Message::Run { level, packets }
@@ -288,7 +326,7 @@ impl Run {
     pub fn push(&mut self, packet: &[u8]) -> Result<(), ViewedLevelsError> {
         let mut r = Reader::new(packet);
         let id = r.varint()?;
-        check_level_scoped(id, r.rest())?;
+        check_level_scoped(id, r.rest(), REVISION)?;
         let len = i32::try_from(packet.len()).map_err(|_| ViewedLevelsError::CutShort)?;
         self.w.varint(len);
         self.w.bytes(packet);
@@ -311,10 +349,11 @@ fn head(kind: u8, level: i32) -> Writer {
     w
 }
 
-/// Refuses a packet (its id and the bytes after it) that is not level-scoped, or that its play
-/// clientbound codec does not read exactly.
-fn check_level_scoped(id: i32, body: &[u8]) -> Result<(), ViewedLevelsError> {
-    if !LEVEL_SCOPED.contains(&id) {
+/// Refuses a packet (its id and the bytes after it) that is not level-scoped at `revision`, or
+/// that its play clientbound codec does not read exactly.
+fn check_level_scoped(id: i32, body: &[u8], revision: u8) -> Result<(), ViewedLevelsError> {
+    let sound = revision >= REVISION_3 && SOUNDS.contains(&id);
+    if !LEVEL_SCOPED.contains(&id) && !sound {
         return Err(ViewedLevelsError::NotLevelScoped(id));
     }
     let scoped =
@@ -557,29 +596,99 @@ mod tests {
                 max_levels,
             })
         };
-        assert_eq!(query(), [0, 2]);
-        assert_eq!(read_query(&[0, 2]), Ok(()));
+        assert_eq!(query(), [0, 3]);
+        assert_eq!(read_query(&[0, 3]), Ok(()));
+        assert_eq!(read_query(&[0, 2]), Ok(()), "revision 2's query");
         assert_eq!(
-            read_query(&[0, 3, 7, 7]),
+            read_query(&[0, 4, 7, 7]),
             Ok(()),
             "a later revision's query"
         );
         assert_eq!(read_query(&[0, 1]), Ok(()), "an older revision's query");
-        assert_eq!(read_query(&[0, 2, 7]), Err(ViewedLevelsError::LeftOver));
-        assert_eq!(answer(2), [1, 2, 2]);
+        assert_eq!(read_query(&[0, 3, 7]), Err(ViewedLevelsError::LeftOver));
+        assert_eq!(answer(2), [1, 3, 2]);
         assert_eq!(read_answer(&[1, 2, 2]), answered(2, 2));
         assert!(read_answer(&[1, 2, 2]).unwrap().switches());
         let older = read_answer(&[1, 1, 2]);
         assert_eq!(older, answered(1, 2), "revision 1 is still served");
         assert!(!older.unwrap().switches());
-        for revision in [0, 3] {
+        assert!(read_answer(&[1, 3, 2]).unwrap().sounds());
+        assert!(read_answer(&[1, 3, 2]).unwrap().switches());
+        assert!(
+            !read_answer(&[1, 2, 2]).unwrap().sounds(),
+            "revision 2: no sounds"
+        );
+        assert!(!older.unwrap().sounds());
+        for revision in [0, 4] {
             assert_eq!(
                 read_answer(&[1, revision, 5, 9]),
                 Ok(Answer::default()),
                 "revision {revision} views none"
             );
         }
-        assert_eq!(read_answer(&[1, 2]), Err(ViewedLevelsError::CutShort));
+        assert_eq!(read_answer(&[1, 3]), Err(ViewedLevelsError::CutShort));
         assert_eq!(read_answer(&[0, 2]), Err(ViewedLevelsError::UnknownKind(0)));
+    }
+
+    #[test]
+    fn a_run_carries_a_sound_from_revision_3_and_below_it_is_refused() {
+        let sound = Clientbound::Sound(play::Sound {
+            sound: (5, None),
+            source: 4,
+            x: 80,
+            y: 520,
+            z: -24,
+            volume: 2.0,
+            pitch: 0.5,
+            seed: 7,
+        });
+        let run = received(&Run::new(1, &sound.encode()).unwrap().finish());
+        let Message::Run { level, packets } = Message::decode(&run.data).unwrap() else {
+            panic!("not a run");
+        };
+        assert_eq!(level, 1);
+        assert_eq!(packets.len(), 1);
+        assert_eq!(packets[0].0, 119);
+        assert_eq!(Clientbound::decode(119, packets[0].1).unwrap(), sound);
+        // A sound bound to an entity: id 118, holder 6 (registry id 5), source 4, entity 9,
+        // volume 1.0, pitch 1.0, seed 0.
+        let bound = [
+            118, 6, 4, 9, 0x3f, 0x80, 0, 0, 0x3f, 0x80, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        ];
+        assert!(Run::new(1, &bound).is_ok());
+        // Below revision 3 either one is a protocol error, heard or not.
+        let bound = Run::new(1, &bound).unwrap().finish();
+        for (data, id) in [(&run.data, 119), (&received(&bound).data, 118)] {
+            assert!(Message::decode_in(data, 3).is_ok());
+            for revision in [1, 2] {
+                for sounds in [true, false] {
+                    assert_eq!(
+                        Message::decode_with(data, revision, sounds),
+                        Err(ViewedLevelsError::NotLevelScoped(id))
+                    );
+                }
+            }
+        }
+        // Not heard: skipped unread, even cut short; the block update beside it is kept.
+        let block = [8, 0, 0, 0, 0, 0, 0, 0, 0, 1];
+        let wire = [&[1, 1, 2, 119, 0][..], &[10], &block].concat();
+        assert_eq!(
+            Message::decode_with(&wire, 3, false),
+            Ok(Message::Run {
+                level: 1,
+                packets: vec![(8, &block[1..])]
+            })
+        );
+        assert!(
+            Message::decode_with(&wire, 3, true).is_err(),
+            "heard, it is read"
+        );
+        assert_eq!(
+            Message::decode_with(&run.data, 3, false),
+            Ok(Message::Run {
+                level: 1,
+                packets: Vec::new()
+            })
+        );
     }
 }

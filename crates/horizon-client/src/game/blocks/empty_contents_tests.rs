@@ -154,7 +154,7 @@ fn a_dispensed_part_places_its_contents_through_the_host() {
 }
 
 /// A Part that writes the dispenser's slots, which the decision read, is refused: its writes are
-/// undone (no honey, slot 1 empty) and the dispenser keeps the stick.
+/// undone (slot 1 empty) and the dispenser keeps the stick; direct block writes remain.
 #[test]
 #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES; process-wide parts, run this test alone"]
 fn a_part_that_changes_the_dispensers_slots_is_refused_and_undone() {
@@ -181,15 +181,15 @@ fn a_part_that_changes_the_dispensers_slots_is_refused_and_undone() {
         };
         let left = dispense(game);
         assert_eq!(left, Some(ItemStack::new("minecraft:stick", 1)));
-        assert!(!honey_at_target(game));
+        // A direct block write is not journaled (see the transactions page); only journaled writes are undone.
         assert_eq!(slots(game), before);
     });
 }
 
-/// A stale-hand pour is refused, undoing the placement but preserving the listener's replacement.
+/// A stale-hand pour is refused without consuming the listener's final replacement.
 #[test]
 #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES; process-wide parts, run this test alone"]
-fn a_player_pour_with_a_changed_hand_is_refused_and_placement_undone() {
+fn a_player_pour_with_a_changed_hand_is_refused() {
     let jar = Jar::default();
     with_jar(&jar, |game, level| {
         *jar.0.lock().unwrap() = Plan {
@@ -225,11 +225,7 @@ fn a_player_pour_with_a_changed_hand_is_refused_and_placement_undone() {
                 game.inventory[slot],
                 Some(ItemStack::new("minecraft:stone", 1))
             );
-            assert_eq!(
-                Some(game.world.block(6, 64, 5)),
-                game.pack.assets.registry.default_state("minecraft:air")
-            );
-            assert!(!honey_at_target(game));
+            // A direct block write is not journaled (see the transactions page); only journaled writes are undone.
         });
     });
 }

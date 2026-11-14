@@ -55,6 +55,9 @@ impl LevelAccess for GameLevel<'_> {
             self.native_block_changed(self.dimension, pos, old, new);
         }
     }
+    fn observes_block_state_change(&self, old: BlockStateId, new: BlockStateId) -> bool {
+        self.block_state_change_heard(old, new)
+    }
     fn observe_block_state_change(&self, pos: BlockPos, old: BlockStateId, new: BlockStateId) {
         self.block_state_change(pos, old, new);
     }

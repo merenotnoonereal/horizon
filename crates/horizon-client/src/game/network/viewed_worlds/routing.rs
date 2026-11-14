@@ -12,7 +12,7 @@ use horizon_client::{text::Text, viewed_levels_net::MAX_LEVELS, world::World};
 use horizon_protocol::{
     packets::play::{Clientbound as C, SpawnInfo},
     registry::DimensionType,
-    viewed_levels::{CHANNEL, MAX_ENTITIES, Message, ViewedLevelsError},
+    viewed_levels::{CHANNEL, MAX_ENTITIES, Message, REVISION, SOUNDS, ViewedLevelsError},
 };
 use horizon_world::{dimension_type::DimensionFacts, registry::BlockStateId};
 
@@ -130,14 +130,28 @@ impl Game<'_> {
     }
 
     pub(in crate::game) fn route_viewed_levels(&mut self, data: &[u8]) -> Result<(), RouteError> {
-        match Message::decode(data)? {
+        // A run's sounds are kept only for a listener: without one they are skipped unread.
+        match Message::decode_with(data, REVISION, super::sounds::listened())? {
             Message::Open { level, spawn } => self.open_viewed_level(level, &spawn),
             Message::Run { level, packets } => {
-                let facts = self.res.facts();
-                let Some(world) = self.remote.as_mut().and_then(|r| r.viewed.get_mut(level)) else {
+                if !self
+                    .remote
+                    .as_ref()
+                    .is_some_and(|r| r.viewed.contains(level))
+                {
                     return Err(RouteError::NotOpen(level));
-                };
+                }
                 for (id, body) in packets {
+                    // A sound plays in the player's level, if a mod says where.
+                    if SOUNDS.contains(&id) {
+                        self.viewed_level_sound(level, id, body)?;
+                        continue;
+                    }
+                    let facts = self.res.facts();
+                    let Some(world) = self.remote.as_mut().and_then(|r| r.viewed.get_mut(level))
+                    else {
+                        return Err(RouteError::NotOpen(level));
+                    };
                     // The codec read each one exactly already.
                     let packet =
                         C::decode(id, body).map_err(|_| ViewedLevelsError::MalformedPacket(id))?;

@@ -1690,6 +1690,7 @@ mod tests {
     /// Players walking, crossing borders, meeting, splitting, joining, leaving
     /// and swapping order: every pass matches the uncached collection.
     #[test]
+    #[ignore = "daily"]
     fn spawn_candidates_match_the_uncached_union_while_players_move() {
         let mut seed = 0x5DEECE66Du64;
         let mut next = move |bound: u64| {

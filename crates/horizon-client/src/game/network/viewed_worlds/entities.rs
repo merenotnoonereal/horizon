@@ -55,7 +55,7 @@ pub(in crate::game) struct ViewedEntities {
 }
 
 impl ViewedEntities {
-    #[cfg(test)]
+    /// Entity `id`, if the world holds it: where a sound bound to it is heard (`sounds`).
     pub(in crate::game) fn get(&self, id: i32) -> Option<&ViewedEntity> {
         self.entities.get(&id)
     }

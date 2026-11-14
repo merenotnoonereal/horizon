@@ -1186,6 +1186,7 @@ mod stack_crossing_tests {
     use super::*;
 
     #[test]
+    #[ignore = "daily"]
     fn level_block_read_refusal_runtime_and_mutants() {
         let mut implementations = String::new();
         for source in [
@@ -1316,6 +1317,7 @@ mod level { pub trait LevelAccess { fn block_state(&self,pos:crate::BlockPos)->c
     }
 
     #[test]
+    #[ignore = "daily"]
     fn block_numeric_index_runtime_and_mutants() {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
         let directory = root.join("target/hook-index-proof");
@@ -1374,6 +1376,7 @@ mod level { pub trait LevelAccess { fn block_state(&self,pos:crate::BlockPos)->c
         }
     }
     #[test]
+    #[ignore = "daily"]
     fn per_block_routing_runtime_and_mutants() {
         let state: Type = syn::parse_quote!(BlockState);
         let writes: Type = syn::parse_quote!(&mut Vec<LandingWrite>);
@@ -1494,6 +1497,7 @@ fn main() {
     }
 
     #[test]
+    #[ignore = "daily"]
     fn block_crossing_runtime_and_mutants() {
         let state: Type = syn::parse_quote!(&mut BlockState);
         let sibling: Type = syn::parse_quote!(&mut u32);
@@ -1662,6 +1666,7 @@ fn main() {
         syn::parse_str::<syn::Block>(&body).unwrap();
     }
     #[test]
+    #[ignore = "daily"]
     fn unsubscribed_owned_values_never_convert_or_allocate() {
         for record in ["ItemStack", "ParticleOptions"] {
             let stack: Type = syn::parse_str(&format!("&{record}")).unwrap();
@@ -1939,6 +1944,7 @@ mod tests {
     use super::*;
 
     #[test]
+    #[ignore = "daily"]
     fn setting_changes_notify_only_the_owner() {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
         let sources = super::super::sources(&root, super::super::FillMode::Require).unwrap();
@@ -2017,6 +2023,7 @@ fn main() {{ generated::dispatch_setting_changed(&mut (), "a", "toggle"); assert
     }
 
     #[test]
+    #[ignore = "daily"]
     fn settings_boundary_owns_and_caches_values() {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
         let source = std::fs::read_to_string(
@@ -2168,6 +2175,7 @@ fn main() {{ game::run(std::env::args_os().nth(1).unwrap().into()); }}
     }
 
     #[test]
+    #[ignore = "daily"]
     fn an_answered_collect_names_the_mod_of_each_entry() {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
         let hook = Hook {
@@ -2271,6 +2279,7 @@ fn main() {{
     }
 
     #[test]
+    #[ignore = "daily"]
     fn scoped_native_hook_uses_selected_host_and_game_hooks_keep_their_receiver() {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
         let fire = super::super::sources(&root, super::super::FillMode::Require)
@@ -2284,6 +2293,7 @@ fn main() {{
     }
 
     #[test]
+    #[ignore = "daily"]
     fn a_worldgen_part_method_takes_the_worldgen_context_and_reads_the_published_table() {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
         let hooks = super::super::sources(&root, super::super::FillMode::Require)

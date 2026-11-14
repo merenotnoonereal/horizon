@@ -257,6 +257,13 @@ fn __horizon_mod_hooks() -> Box<dyn Hooks> {
         ) {
             entity_layers::register(event.layers);
         }
+        fn register_special_model_renderer(
+            &self,
+            _: &mod_api::RegistrationContext,
+            event: &mut mod_api::RegisterSpecialModelRendererEvent<'_>,
+        ) {
+            special_model_renderers::register(event.renderers);
+        }
         fn register(
             &self,
             registrar: &mut dyn mod_api::Registrar,
@@ -404,6 +411,13 @@ fn __horizon_mod_hooks() -> Box<dyn Hooks> {
                 event.remaining.as_ref().map(|rest| rest.count()),
             )));
             *event.remaining = None;
+        }
+        fn viewed_level_sound(
+            &self,
+            _: &mut dyn mod_api::ClientHost,
+            event: &mut mod_api::ViewedLevelSoundEvent<'_>,
+        ) {
+            viewed_level_sound::listen(event);
         }
         fn item_toss(
             &self,

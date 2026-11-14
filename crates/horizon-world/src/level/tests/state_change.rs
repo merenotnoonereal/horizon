@@ -11,12 +11,21 @@ struct StateChangeLevel {
     changed: RefCell<Vec<(BlockStateId, BlockStateId, String)>>,
     /// `observe_block_state_change`: the change and the fence's east side then.
     state_changes: RefCell<Vec<(BlockStateId, BlockStateId, String)>>,
+    /// The east side of the fence at `beside`, at each `observe_block_state_change`.
+    beside: BlockPos,
+    beside_east: RefCell<Vec<String>>,
+    /// `observe_block_state_change`: the x of the position and the new state, in the order
+    /// heard.
+    heard: RefCell<Vec<(i32, BlockStateId)>>,
     registry: &'static BlockRegistry,
 }
 impl StateChangeLevel {
     fn east(&self) -> String {
+        self.east_at(self.fence)
+    }
+    fn east_at(&self, pos: BlockPos) -> String {
         self.registry
-            .state(self.block_state(self.fence))
+            .state(self.block_state(pos))
             .and_then(|s| s.properties.get("east").cloned())
             .unwrap_or_default()
     }
@@ -42,9 +51,15 @@ impl LevelAccess for StateChangeLevel {
         let east = self.east();
         self.changed.borrow_mut().push((old, new, east));
     }
-    fn observe_block_state_change(&self, _pos: BlockPos, old: BlockStateId, new: BlockStateId) {
+    fn observes_block_state_change(&self, _old: BlockStateId, _new: BlockStateId) -> bool {
+        true
+    }
+    fn observe_block_state_change(&self, pos: BlockPos, old: BlockStateId, new: BlockStateId) {
+        self.heard.borrow_mut().push((pos.x, new));
         let east = self.east();
         self.state_changes.borrow_mut().push((old, new, east));
+        let beside = self.east_at(self.beside);
+        self.beside_east.borrow_mut().push(beside);
     }
 }
 
@@ -66,6 +81,9 @@ fn a_state_change_is_heard_after_the_neighbours_settled_and_only_when_the_write_
         fence: BlockPos::new(-1, 1, 0),
         changed: RefCell::new(Vec::new()),
         state_changes: RefCell::new(Vec::new()),
+        beside: BlockPos::new(-2, 1, 0),
+        beside_east: RefCell::new(Vec::new()),
+        heard: RefCell::new(Vec::new()),
         registry,
     };
     let mut ticks = Ticks::new(0);
@@ -108,4 +126,86 @@ fn a_state_change_is_heard_after_the_neighbours_settled_and_only_when_the_write_
         .filter(|(old, new)| [*old, *new].contains(&sponge))
         .collect();
     assert_eq!(heard, [(sponge, wet_sponge)]);
+}
+
+#[test]
+#[ignore = "requires prepared block behaviour resources"]
+fn a_nested_write_is_heard_after_the_updates_it_queued() {
+    let Some(f) = fixture() else {
+        return;
+    };
+    let b = &f.behaviours;
+    let registry: &'static BlockRegistry = &f.registry;
+    let mut level = StateChangeLevel {
+        inner: TestLevel::new(b),
+        fence: BlockPos::new(-1, 1, 0),
+        changed: RefCell::new(Vec::new()),
+        state_changes: RefCell::new(Vec::new()),
+        beside: BlockPos::new(-2, 1, 0),
+        beside_east: RefCell::new(Vec::new()),
+        heard: RefCell::new(Vec::new()),
+        registry,
+    };
+    let mut ticks = Ticks::new(0);
+    let [fence, stone] = ["oak_fence", "stone"].map(|name| state(f, name));
+    level.inner.set_raw(BlockPos::new(-1, 1, 0), fence);
+    level.inner.set_raw(BlockPos::new(-2, 1, 0), fence);
+    // Stone east of the first fence: its shape update is a write inside the stone's, and that
+    // write queues a shape update to the second fence, which then connects to the first.
+    assert!(b.set_block(
+        &mut level,
+        &mut ticks,
+        BlockPos::new(0, 1, 0),
+        stone,
+        flags::UPDATE_ALL
+    ));
+    assert_eq!(level.east_at(BlockPos::new(-2, 1, 0)), "true");
+    // Each fence connects to the other, then the stone's own change is heard. The first
+    // fence's change is heard once the second fence has settled: no notification sees the
+    // second fence's east side unsettled.
+    assert_eq!(level.state_changes.borrow().len(), 4);
+    assert_eq!(*level.beside_east.borrow(), ["true"; 4]);
+}
+
+#[test]
+#[ignore = "requires prepared block behaviour resources"]
+fn nested_writes_are_heard_in_the_order_they_were_made() {
+    let Some(f) = fixture() else {
+        return;
+    };
+    let b = &f.behaviours;
+    let registry: &'static BlockRegistry = &f.registry;
+    let mut level = StateChangeLevel {
+        inner: TestLevel::new(b),
+        fence: BlockPos::new(-1, 1, 0),
+        changed: RefCell::new(Vec::new()),
+        state_changes: RefCell::new(Vec::new()),
+        beside: BlockPos::new(-2, 1, 0),
+        beside_east: RefCell::new(Vec::new()),
+        heard: RefCell::new(Vec::new()),
+        registry,
+    };
+    let mut ticks = Ticks::new(0);
+    let [fence, stone] = ["oak_fence", "stone"].map(|name| state(f, name));
+    level.inner.set_raw(BlockPos::new(-1, 1, 0), fence);
+    level.inner.set_raw(BlockPos::new(-2, 1, 0), fence);
+    // Stone at x 0. Written in this order: the first fence connects east (A), the second
+    // fence connects east to it (B, made while A's updates run), the first connects west back
+    // (C, made while B's updates run), then the stone's own write (D).
+    b.set_block(
+        &mut level,
+        &mut ticks,
+        BlockPos::new(0, 1, 0),
+        stone,
+        flags::UPDATE_ALL,
+    );
+    let heard = level.heard.borrow();
+    assert_eq!(
+        heard.iter().map(|(x, _)| *x).collect::<Vec<_>>(),
+        [-1, -2, -1, 0]
+    );
+    // A is the first fence with its east side only; C is the same fence with both sides.
+    let both = level.block_state(BlockPos::new(-1, 1, 0));
+    assert_ne!(heard[0].1, both);
+    assert_eq!(heard[2].1, both);
 }

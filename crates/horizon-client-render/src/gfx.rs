@@ -13237,6 +13237,7 @@ mod tests {
     /// writes it for FXC (shader model 5.1), entry point by entry point, and
     /// every shader the OpenGL backend runs also translates to GLSL.
     #[test]
+    #[ignore = "daily"]
     fn shaders_translate_to_hlsl_for_directx_12_and_glsl_for_opengl() {
         fn wgsl_files(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
             for entry in std::fs::read_dir(dir).unwrap() {
@@ -13710,6 +13711,7 @@ mod tests {
     /// GPU culling is switched off (`forget_records`), every mark is the one a
     /// section has while it is off.
     #[test]
+    #[ignore = "daily"]
     fn fading_sections_go_to_the_cpu_and_come_back() {
         use super::{
             FadeInputs, SectionGpu, SectionKey, decide_fade, forget_records, gpu_culling,

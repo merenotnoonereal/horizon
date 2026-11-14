@@ -38,6 +38,7 @@ fn hub_with(uuids: &[u128], max_levels: u8) -> (Hub, Vec<Receiver<Out>>) {
 fn hub_answered(uuids: &[u128], answer: Answer) -> (Hub, Vec<Receiver<Out>>) {
     let config = crate::lan::NetConfig {
         announce: false,
+        listen: false,
         ..crate::lan::NetConfig::loopback(0, "ViewedLevelsTest".into(), 4)
     };
     // Players are an entity type its clients know, so the levels' players are tracked.
@@ -822,4 +823,109 @@ fn a_respawned_player_is_removed_from_a_view_and_added_again() {
         "a fresh AddEntity"
     );
     assert!(tracked(&hub));
+}
+
+/// The sounds a client was sent wrapped, with their level.
+fn wrapped_sounds(got: &[Got]) -> Vec<(i32, horizon_protocol::packets::play::Sound)> {
+    got.iter()
+        .filter_map(|g| match g {
+            Got::Wrapped { level, id, body } if *id == ids::SOUND => {
+                let Ok(C::Sound(p)) = C::decode(*id, body) else {
+                    panic!("not a sound");
+                };
+                Some((*level, p))
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+/// A sound in the Nether (#3983) reaches, wrapped, a viewer of revision 3 whose sent chunks hold
+/// its chunk and one of whose areas has its centre chunk within the sound's broadcast distance
+/// plus 16 blocks of it. A viewer without the chunk, one beyond the distance and a client of
+/// revision 2 get nothing; nothing is sent plain.
+#[test]
+#[ignore = "daily"]
+fn a_viewed_sound_reaches_a_viewer_holding_its_chunk_within_its_distance() {
+    // 1 and 3 view a radius-3 square at (0, 0), 2 the one chunk (5, 0); 3 answered revision 2.
+    let (mut hub, rx) = hub_with(&[1, 2, 3], 2);
+    let square = |center, radius| vec![area(NETHER, center, radius, ChunkAreaMode::Loaded)];
+    for (uuid, center, radius) in [(1, (0, 0), 3), (2, (5, 0), 0), (3, (0, 0), 3)] {
+        hub.set_viewed_areas(uuid, "test:portal", square(center, radius))
+            .unwrap();
+    }
+    hub.guests
+        .update(2, |g| g.sender.viewed_levels.revision = 2);
+    hub.set_dimension(NETHER);
+    let mut world = lit_columns(5);
+    // 49 columns at 9 a batch.
+    for _ in 0..6 {
+        for i in 0..3 {
+            hub.guests.update(i, |g| {
+                g.batch_quota = 9.0;
+                g.unacknowledged = 0;
+            });
+        }
+        run_level(&mut hub, &mut world);
+    }
+    let held: Vec<_> = (0..3)
+        .map(|i| hub.guests[i].viewed.view(NETHER).unwrap().sent.len())
+        .collect();
+    assert_eq!(held, [49, 1, 49]);
+    for r in &rx {
+        let _ = got(r);
+    }
+    // Chunk (3, 0): 3 chunks, 48 blocks, from the centre of 1's square; 2 chunks from 2's.
+    let at = [56.5, 64.0, 8.25];
+    hub.sound("minecraft:block.anvil.land", at, 1.0, 1.25, 4, None);
+    assert_eq!(got(&rx[0]), [], "48 blocks is past 16 + 16");
+    hub.sound("minecraft:block.anvil.land", at, 2.0, 1.25, 4, None);
+    let sent = got(&rx[0]);
+    assert!(sent.iter().all(|g| !matches!(g, Got::Plain(_))), "{sent:?}");
+    let sounds = wrapped_sounds(&sent);
+    assert_eq!(sounds.len(), 1, "48 blocks is within 32 + 16");
+    let (level, sound) = &sounds[0];
+    assert_eq!(*level, NETHER_INDEX);
+    assert_eq!(
+        sound.sound,
+        (-1, Some(("minecraft:block.anvil.land".to_owned(), None)))
+    );
+    assert_eq!((sound.x, sound.y, sound.z), (452, 512, 66));
+    assert_eq!((sound.source, sound.volume, sound.pitch), (4, 2.0, 1.25));
+    assert_eq!(got(&rx[1]), [], "2 does not hold chunk (3, 0)");
+    assert_eq!(got(&rx[2]), [], "3 answered revision 2");
+    // A sound bound to an entity the view does not track is not sent to it.
+    hub.captured_sound(
+        &crate::audio::CapturedSound {
+            event: "minecraft:entity.goat.ram_impact".into(),
+            position: [8.5, 64.0, 8.5],
+            volume: 1.0,
+            pitch: 1.0,
+            source: 5,
+            entity: Some(40),
+            except_entity: None,
+        },
+        None,
+    );
+    assert_eq!(got(&rx[0]), []);
+}
+
+/// With no client viewing a level, or none holding a sound's chunk, no wrapped copy of the sound
+/// is built.
+#[test]
+#[ignore = "daily"]
+fn with_no_viewer_no_copy_is_built() {
+    let (mut hub, rx) = hub_with(&[1], 2);
+    let built = || -> Vec<u8> { panic!("a copy was built") };
+    hub.send_viewed_sound(NETHER, [8.5, 64.0, 8.5], 16.0, None, built);
+    hub.set_viewed_areas(1, "test:portal", nether(1)).unwrap();
+    hub.set_dimension(NETHER);
+    run_level(&mut hub, &mut lit_columns(2));
+    assert_eq!(
+        wrapped_columns(&got(&rx[0]), ids::LEVEL_CHUNK_WITH_LIGHT).len(),
+        9
+    );
+    hub.send_viewed_sound("minecraft:the_end", [8.5, 64.0, 8.5], 16.0, None, built);
+    hub.send_viewed_sound(NETHER, [40.5, 64.0, 8.5], 16.0, None, built);
+    assert_eq!(got(&rx[0]), []);
 }

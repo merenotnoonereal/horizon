@@ -1,4 +1,4 @@
 pub use crate::item::menu::{
-    DragKind, LogicalSide, MenuClick, MenuReplace, MouseButton, StackResult, StackedOnOther,
-    StackedOnOtherResult, SwapWith,
+    DragKind, LogicalSide, MenuClick, MenuContainer, MenuReplace, MenuSlotContext, MouseButton,
+    StackResult, StackedOnOther, StackedOnOtherResult, SwapWith,
 };

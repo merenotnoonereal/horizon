@@ -771,6 +771,7 @@ impl Hub {
                 container_limits: std::mem::take(&mut prepared.container_limits),
                 hidden: &prepared.hidden,
                 loop_context,
+                slot_snapshot: Default::default(),
             };
             menu::click(
                 &mut view,
@@ -817,6 +818,7 @@ impl Hub {
                 container_limits: Vec::new(),
                 hidden: &prepared.hidden,
                 loop_context,
+                slot_snapshot: Default::default(),
             }
             .stacked_click(i32::from(p.slot), i32::from(p.button))
         })
@@ -850,6 +852,7 @@ impl Hub {
                     container_limits: prepared.container_limits.clone(),
                     hidden: &prepared.hidden,
                     loop_context,
+                    slot_snapshot: Default::default(),
                 },
                 &mut prepared.drag,
                 i32::from(p.slot),

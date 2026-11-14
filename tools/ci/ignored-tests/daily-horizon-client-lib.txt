@@ -71,6 +71,7 @@ horizon-client-lib realms::client::tests::the_join_answer_reads_vanillas_field_n
 horizon-client-lib realms::client::tests::the_tier_configuration_names_both_ranges_and_their_default lib daily network
 horizon-client-lib realms::client::tests::world_templates_are_asked_for_by_page_and_world_type lib daily network
 horizon-client-lib save::biome_tests::an_exhausted_biome_table_refuses_every_save_before_touching_the_world lib daily slow
+horizon-client-lib save::chunk_disk_tests::save_refused_during_open_action_savepoint_runs_no_callback_and_keeps_disk_7 lib daily child-process
 horizon-client-lib save::tests::native_saved_ids_must_match_the_declared_block_membership lib daily child-process
 horizon-client-lib save::tests::saved_light_matches_reference_for_layers_and_metadata lib daily slow
 horizon-client-lib save::writes::saved_portals::tests::saved_portal_blocks_follow_each_save_of_their_chunk lib daily resources

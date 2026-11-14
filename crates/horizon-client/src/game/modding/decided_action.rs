@@ -23,6 +23,8 @@ pub(in crate::game) enum Epoch {
     /// A player's own state (inventory, cursor, menu storage). A write to another block, which a
     /// mod's move legitimately makes, does not make the decision stale.
     Player,
+    /// Every journaled write, including linked recipe containers and equal rewrites.
+    All,
 }
 
 type Fresh<'p> = Box<dyn Fn(&Game<'_>) -> bool + 'p>;
@@ -42,6 +44,7 @@ struct Action<'p> {
 
 struct Reads {
     player_writes: u64,
+    writes: u64,
 }
 
 struct Plan;
@@ -58,6 +61,7 @@ impl<'a, 'g> ActionTarget<GameHost<'a, 'g>> for Action<'_> {
     fn capture(&self, host: &GameHost<'a, 'g>) -> std::result::Result<Reads, Outcome> {
         Ok(Reads {
             player_writes: host.game.transactions.player_writes(),
+            writes: host.game.transactions.writes(),
         })
     }
     fn view(reads: &Reads) -> &Reads {
@@ -70,6 +74,9 @@ impl<'a, 'g> ActionTarget<GameHost<'a, 'g>> for Action<'_> {
         false
     }
     fn validate(&self, host: &GameHost<'a, 'g>, reads: &Reads) -> std::result::Result<(), Outcome> {
+        if self.shared.epoch == Epoch::All && host.game.transactions.writes() != reads.writes {
+            return Err(Outcome::Stale(StaleReason::Mutation));
+        }
         if self.shared.epoch == Epoch::Player
             && host.game.transactions.player_writes() != reads.player_writes
         {

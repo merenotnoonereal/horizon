@@ -1,0 +1,2 @@
+clippy -p horizon-client --all-targets -- -D warnings
+test -p horizon-client --lib -- lan_recipe_decisions mod_menu_decisions

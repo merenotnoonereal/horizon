@@ -695,6 +695,22 @@ impl Game<'_> {
             return;
         }
         let (player, name, creative) = (g.uuid, g.name.clone(), g.creative());
+        if self.recipe_listened(gi, p.container, true) {
+            if !self.recipe_window_available(gi, p.container) {
+                return;
+            }
+            let placed = self.lan_recipe_decided(
+                gi,
+                p.container,
+                Some((&id, p.use_max)),
+                true,
+                |menu, env| menu.place_recipe(env, &id, p.use_max, creative, None),
+            );
+            if placed.is_none() || placed == Some(PostPlace::Ghost) {
+                self.recipe_ghost(gi, p.container, &id);
+            }
+            return;
+        }
         self.native_player_recipe_book_click(player, &name, &id, p.use_max);
         // A mod menu type's crafting grid places as a crafting table's.
         if self.lan_mod_crafting_window(gi, p.container).is_some() {
@@ -811,14 +827,13 @@ impl Game<'_> {
         let mut reply = Writer::new();
         reply.varint(container);
         reply.u8(recipes::result_byte(recipes::transfer_result(result)));
-        if let Some(host) = self.lan.as_ref() {
-            host.hub.guests[gi].send(&C::CustomPayload(
-                horizon_protocol::packets::configuration::CustomPayload {
-                    channel: recipes::TRANSFER_CHANNEL.into(),
-                    data: reply.data,
-                },
-            ));
-        }
+        self.recipe_reply(
+            gi,
+            C::CustomPayload(horizon_protocol::packets::configuration::CustomPayload {
+                channel: recipes::TRANSFER_CHANNEL.into(),
+                data: reply.data,
+            }),
+        );
     }
 
     /// A viewer's check of a transfer (`horizon:recipe_check`): the matching
@@ -876,14 +891,13 @@ impl Game<'_> {
                 reply.u8(c);
             }
         }
-        if let Some(host) = self.lan.as_ref() {
-            host.hub.guests[gi].send(&C::CustomPayload(
-                horizon_protocol::packets::configuration::CustomPayload {
-                    channel: recipes::CHECK_CHANNEL.into(),
-                    data: reply.data,
-                },
-            ));
-        }
+        self.recipe_reply(
+            gi,
+            C::CustomPayload(horizon_protocol::packets::configuration::CustomPayload {
+                channel: recipes::CHECK_CHANNEL.into(),
+                data: reply.data,
+            }),
+        );
     }
 
     /// `Menu::check_transfer` of recipe `id` on a copy of guest `gi`'s window
@@ -892,6 +906,11 @@ impl Game<'_> {
     /// entity with its recipe sources. None when that window is none of them
     /// (the window must be the one the guest has open, as for a transfer).
     fn lan_check_recipe(&mut self, gi: usize, container: i32, id: &str) -> Option<TransferCheck> {
+        if self.recipe_listened(gi, container, false) {
+            return self.lan_recipe_decided(gi, container, None, false, |menu, env| {
+                menu.check_transfer(env, id)
+            });
+        }
         let conn = self.lan.as_ref()?.hub.guests[gi].conn;
         let menu = if let Some((pos, t)) = self.lan_mod_crafting_window(gi, container) {
             let Some(BlockEntity::Mod(m)) = self.world.block_entities.get(&pos) else {
@@ -951,6 +970,9 @@ impl Game<'_> {
         container: i32,
         apply: impl FnOnce(&mut Menu, &Env) -> R,
     ) -> Option<R> {
+        if self.recipe_listened(gi, container, false) {
+            return self.lan_recipe_decided(gi, container, None, true, apply);
+        }
         if self.lan_mod_crafting_window(gi, container).is_some() {
             return self.lan_mod_craft_apply(gi, container, apply);
         }
@@ -1111,7 +1133,7 @@ impl Game<'_> {
 
     /// Guest `gi`'s open window `container` when it is a mod menu type with a
     /// crafting grid: its block and its type.
-    fn lan_mod_crafting_window(
+    pub(super) fn lan_mod_crafting_window(
         &self,
         gi: usize,
         container: i32,
@@ -1139,6 +1161,9 @@ impl Game<'_> {
         container: i32,
         apply: impl FnOnce(&mut Menu, &Env) -> R,
     ) -> Option<R> {
+        if self.recipe_listened(gi, container, false) {
+            return self.lan_recipe_decided(gi, container, None, true, apply);
+        }
         let (pos, t) = self.lan_mod_crafting_window(gi, container)?;
         let Some(BlockEntity::Mod(m)) = self.world.block_entities.get(&pos) else {
             return None;
@@ -1171,28 +1196,11 @@ impl Game<'_> {
             if after == before {
                 continue;
             }
-            match self.world.block_entities.get_mut(&at) {
-                Some(BlockEntity::Chest(items)) => *items = after,
-                Some(BlockEntity::Mod(m)) => {
-                    for (slot, stack) in m.items.iter_mut().zip(after) {
-                        *slot = stack;
-                    }
-                }
-                _ => {}
-            }
-            self.container_changed(at);
+            self.write_recipe_container(at, after);
         }
         let after = menu.container_items();
         if after != items {
-            if let Some(BlockEntity::Mod(m)) = self.world.block_entities.get_mut(&pos) {
-                if m.items.len() < after.len() {
-                    m.items.resize(after.len(), None);
-                }
-                for (slot, stack) in m.items.iter_mut().zip(after) {
-                    *slot = stack;
-                }
-            }
-            self.container_changed(pos);
+            self.write_recipe_container(pos, after);
         }
         self.lan_mod_craft_settle(gi, pos, &mut menu);
         *self
@@ -1298,7 +1306,7 @@ impl Game<'_> {
 
     /// The result guest `gi`'s mod crafting menu shows, with its slot, while
     /// the block entity's grid (`items`) is the one it was made from.
-    fn lan_mod_craft_shown(
+    pub(super) fn lan_mod_craft_shown(
         host: &super::lan::LanHost,
         gi: usize,
         items: &[Option<ItemStack>],
@@ -1413,7 +1421,7 @@ impl Game<'_> {
     }
 
     /// The whole crafting table menu for the client (`sendAllDataToRemote`).
-    fn lan_send_table_content(&mut self, conn: u32) {
+    pub(super) fn lan_send_table_content(&mut self, conn: u32) {
         let Some(host) = self.lan.as_mut() else {
             return;
         };

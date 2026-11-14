@@ -237,11 +237,15 @@ enum KeptEquipment {
 struct KeptMenus {
     ender_items: Vec<Option<ItemStack>>,
     craft_grid: [Option<ItemStack>; 4],
+    craft_result: Option<ItemStack>,
+    mod_craft: Option<horizon_client::lan::menu::ModCraft>,
     native_menu: Vec<Option<ItemStack>>,
 }
 
 /// What a write tells the world, at the root commit.
 pub(super) enum After {
+    /// Recipe placement corrections and replies publish only at root commit.
+    Recipe(super::lan_recipe_decisions::Publication),
     /// Reserved raw bytes publish only when their connection incarnation is still live.
     Payload(super::payload_transport::Deferred),
     /// A mod's validated vanilla packet, bound to its physical protocol incarnation.
@@ -796,6 +800,8 @@ impl Game<'_> {
         let kept = KeptMenus {
             ender_items: g.ender_items.clone(),
             craft_grid: g.craft_grid.clone(),
+            craft_result: g.craft_result.clone(),
+            mod_craft: g.menu.as_ref().and_then(|m| m.craft.clone()),
             native_menu: g.native_menu.clone(),
         };
         if let Some(level) = self.transactions.last_mut() {
@@ -878,6 +884,7 @@ impl Game<'_> {
     }
     fn run_after(&mut self, after: After) {
         match after {
+            After::Recipe(publication) => self.publish_recipe(publication),
             After::Payload(payload) => payload.publish(),
             After::Packet(packet) => packet.publish(),
             After::Cauldron(effects) => self.commit_cauldron_effects(effects),
@@ -1123,6 +1130,10 @@ impl Game<'_> {
                 if let Some(kept) = level.menus.get(&g.conn).filter(|_| g.placed) {
                     g.ender_items.clone_from(&kept.ender_items);
                     g.craft_grid.clone_from(&kept.craft_grid);
+                    g.craft_result.clone_from(&kept.craft_result);
+                    if let Some(menu) = g.menu.as_mut() {
+                        menu.craft.clone_from(&kept.mod_craft);
+                    }
                     g.native_menu.clone_from(&kept.native_menu);
                 }
             });

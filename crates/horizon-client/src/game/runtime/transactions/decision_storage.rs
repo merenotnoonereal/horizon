@@ -3,6 +3,12 @@
 use super::*;
 use horizon_client::join_seq::visibility::PassLease;
 
+#[cfg(test)]
+thread_local! {
+    pub(in crate::game) static DECIDED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    pub(in crate::game) static APPLIED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// A marker lives exactly as long as its transaction level. The existing save
 /// admission gate checks passes_settled(), including this lease. In particular
 /// commands.save.failed is still produced by the existing save-all command.
@@ -113,6 +119,14 @@ pub(in crate::game) struct GameHost<'a, 'g> {
 }
 
 impl ActionHost for GameHost<'_, '_> {
+    #[cfg(test)]
+    fn decided(&mut self) {
+        DECIDED.set(DECIDED.get() + 1);
+    }
+    #[cfg(test)]
+    fn applied(&mut self) {
+        APPLIED.set(APPLIED.get() + 1);
+    }
     fn identity(&self) -> Identity {
         let mut identity = self.identity;
         if let Some(world) = self.game.native_lifecycle.epoch() {

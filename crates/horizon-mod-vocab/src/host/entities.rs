@@ -152,10 +152,10 @@ pub trait EntitiesBackend {
     #[access(WorldOnly)]
     fn entity_rotation(&self, entity: EntityRef) -> Option<[f32; 2]>;
     /// Side: server.
-    /// The entity's type (`Entity.getType`): `minecraft:zombie`. API
-    /// 373.
+    /// The entity's resolved type key (`Entity.getType`). Compare keys directly;
+    /// request `key.id(host)` explicitly when its canonical name is needed. API 373.
     #[access(WorldOnly)]
-    fn entity_kind(&self, entity: EntityRef) -> Option<String>;
+    fn entity_kind(&self, entity: EntityRef) -> Option<EntityTypeKey>;
     /// Side: server.
     /// The level the entity is in (`Entity.level`): on a client, the
     /// client's level. API 373.
@@ -694,6 +694,22 @@ pub trait EntitiesBackendMut {
     #[access(WorldOnly)]
     fn entity_run_command(&mut self, entity: EntityRef, line: &str, level: PermissionLevel)
     -> bool;
+    /// Side: server.
+    /// Runs the command exactly as `EntityRef::run_command` does, at the supplied
+    /// `level`, returning whether it ran and the success and failure lines its
+    /// source received, in order, as plain text. The player's chat still receives
+    /// those lines and operators are notified under the same rules. Another
+    /// entity's silent source returns no lines. A stale, removed or unavailable
+    /// entity returns unsuccessful with no lines. Cross-level teleports retain
+    /// the same next-tick handling. Pass the player's permission level to run
+    /// with their own authority; the supplied level is not capped to it.
+    #[access(WorldOnly)]
+    fn entity_run_command_with_output(
+        &mut self,
+        entity: EntityRef,
+        line: &str,
+        level: PermissionLevel,
+    ) -> CommandResult;
     /// Side: server.
     /// Turns the entity to `yaw` and `pitch` in degrees (`Entity.setYRot`,
     /// `setXRot`): the pitch wraps and is clamped to -90..90. False for kinds

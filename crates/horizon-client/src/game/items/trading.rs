@@ -18,6 +18,7 @@ use horizon_client::{
 const SHIFT: f32 = -50.0;
 const GREY: u32 = 0xFF40_4040;
 
+#[derive(Clone)]
 pub(super) struct MerchantState {
     /// The merchant's side of the menu: offers, experience, level, the
     /// selection hint and active offer (`horizon_client::merchant::Session`).
@@ -483,7 +484,7 @@ impl Game<'_> {
             match e {
                 merchant::Event::OffersRefreshed => {}
                 merchant::Event::Orb(v) => {
-                    self.add_orb([origin[0], origin[1] + 0.5, origin[2]], v as u32)
+                    self.merchant_orb([origin[0], origin[1] + 0.5, origin[2]], v as u32)
                 }
                 merchant::Event::LevelUp(_) => {
                     if let Some(m) = mob.and_then(|id| self.mobs.iter_mut().find(|m| m.id == id)) {
@@ -497,7 +498,7 @@ impl Game<'_> {
                         (false, true) => "minecraft:entity.wandering_trader.yes",
                         (false, false) => "minecraft:entity.wandering_trader.no",
                     };
-                    self.audio.play(sound, Some(origin), 1.0, pitch);
+                    self.merchant_sound(sound, origin, pitch);
                 }
                 merchant::Event::Traded(index, _offer) => {
                     traded.push(index);
@@ -508,7 +509,7 @@ impl Game<'_> {
                     } else {
                         "minecraft:entity.wandering_trader.yes"
                     };
-                    self.audio.play(sound, Some(origin), 1.0, 1.0);
+                    self.merchant_sound(sound, origin, 1.0);
                 }
             }
         }
@@ -543,7 +544,7 @@ impl Game<'_> {
             }
             // TradeWithVillagerEvent: on the server, in the player's turn.
             if let (Some(id), Some(kind), Some(_)) = (mob, kind, self.lan_acting) {
-                self.native_trade_with_villager(id, &kind, offer);
+                self.merchant_trade_answer(id, &kind, offer);
             }
         }
     }

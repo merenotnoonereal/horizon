@@ -1167,6 +1167,14 @@ impl Game<'_> {
         if let (Some(player), Some(name)) = (self.lan_acting_uuid, self.lan_acting_name.clone()) {
             self.native_player_advancement_done(player, &name, &a.id);
         }
+        if self.defer_merchant_reward(a) {
+            return;
+        }
+        self.commit_merchant_reward(a);
+    }
+
+    /// Publish a completed advancement's rewards after its tentative criterion commits.
+    pub(super) fn commit_merchant_reward(&mut self, a: &adv::Advancement) {
         let rewards = self.grant_rewards(a);
         if let Some(d) = &a.display {
             // A network player's client shows its own toast.

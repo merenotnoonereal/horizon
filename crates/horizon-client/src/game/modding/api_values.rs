@@ -715,6 +715,10 @@ impl TryIntoEngine for mod_api::MerchantOffer {
     type Engine = horizon_client::merchant::MerchantOffer;
     type Error = StackWriteError;
     fn try_into_engine(&self, items: &Items) -> Result<Self::Engine, Self::Error> {
+        if !self.price_multiplier.is_finite() {
+            crate::game::lan_trade_decisions::invalid_offer();
+            return Err(StackWriteError::InvalidMaximum);
+        }
         Ok(Self::Engine {
             base_cost_a: self.base_cost_a.try_into_engine(items)?,
             cost_b: self.cost_b.try_into_engine(items)?,

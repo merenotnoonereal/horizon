@@ -6,6 +6,8 @@
 //! network threads ([`io_pool`]): they forward decoded packets to the game
 //! thread, frame, compress and encrypt what the game queues, and keep the
 //! keep-alive schedule on their own so a long tick never times a client out.
+#[path = "transaction_packets.rs"]
+pub mod transaction_packets;
 use super::config_payloads::ConfigIo;
 use super::{
     Joined, NetEvent, Out, Shared,
@@ -500,6 +502,9 @@ impl PlayerSender {
         if matches!(self.to, To::Disabled) {
             return;
         }
+        let Err(body) = transaction_packets::capture(self, body) else {
+            return;
+        };
         if !self.reserve(io_pool::charge(&body)) {
             self.close();
             return;
@@ -535,7 +540,7 @@ impl PlayerSender {
         if matches!(self.to, To::Disabled) {
             return;
         }
-        if !HOLDING.get() {
+        if !HOLDING.get() || transaction_packets::active() {
             bodies.into_iter().for_each(|body| self.send(body));
             return;
         }

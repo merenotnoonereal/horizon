@@ -27,7 +27,7 @@ struct PhantomTarget {
 }
 
 /// `stats[type][key]`, with `type` and `key` namespaced ids.
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub(super) struct Stats {
     pub(super) values: BTreeMap<String, BTreeMap<String, i32>>,
     pub(super) loaded: bool,

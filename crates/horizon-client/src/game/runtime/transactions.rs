@@ -151,6 +151,9 @@ pub(super) struct Level {
     after: Vec<After>,
     /// Internal decide/fire/apply state. No menu route uses this yet.
     actions: decision::Journal,
+    /// Merchant takes keep their session, mob, statistics and criterion progress together.
+    pub(in crate::game) trades: super::lan_trade_decisions::Journal,
+    pub(in crate::game) packets: Option<horizon_client::lan::conn::transaction_packets::Scope>,
     action: Option<decision::ActiveAction>,
     /// The scratch stacks (`ItemPlace::Scratch`), live: kept by the outermost transaction only.
     scratch: HashMap<u64, scratch::Scratch>,
@@ -271,6 +274,8 @@ pub(super) enum After {
     Biome((i32, i32)),
     /// Deferred interaction effects, replayed in the same root-commit order.
     Effect(DeferredEffect),
+    /// Effects of a tentative merchant take, published only at the root.
+    Trade(Box<super::lan_trade_decisions::Effect>),
     /// `Block.popResource`.
     Drop([i32; 3], ItemStack),
     /// `Player.drop(stack, false)` by the player with this UUID: what no longer fits.
@@ -344,6 +349,7 @@ impl Game<'_> {
             token,
             close_token,
             dimension: Some(self.dim),
+            packets: horizon_client::lan::conn::transaction_packets::Scope::nested(),
             ..Level::default()
         });
         if let Some(key) = &mut self.block_entity_tick_key {
@@ -427,7 +433,14 @@ impl Game<'_> {
         }
     }
     /// What closing `level` does, with the closing phase already set.
-    fn close_level(&mut self, level: Level, commit: bool) {
+    fn close_level(&mut self, mut level: Level, commit: bool) {
+        if let Some(scope) = level.packets.take() {
+            if commit && let Some(packets) = scope.finish() {
+                level.after.push(After::Trade(Box::new(
+                    super::lan_trade_decisions::Effect::Packets(packets),
+                )));
+            }
+        }
         if let Some(scope) = &mut self.block_entity_tick_items {
             scope.close_transaction(commit);
         }
@@ -442,6 +455,7 @@ impl Game<'_> {
         match (commit, self.transactions.last_mut()) {
             (true, Some(outer)) => {
                 outer.actions.merge(level.actions);
+                outer.trades.merge(level.trades);
                 // Slots before whole entities: a slot the outer transaction already kept the
                 // whole entity of is older there, but one kept whole only by this child is not,
                 // so the child's slot entries go up beside its capture.
@@ -878,6 +892,7 @@ impl Game<'_> {
     }
     fn run_after(&mut self, after: After) {
         match after {
+            After::Trade(effect) => self.commit_merchant_effect(*effect),
             After::Payload(payload) => payload.publish(),
             After::Packet(packet) => packet.publish(),
             After::Cauldron(effects) => self.commit_cauldron_effects(effects),
@@ -1193,6 +1208,7 @@ impl Game<'_> {
             }
         }
         level.actions.rollback_in(self);
+        level.trades.rollback(self);
         for (uuid, kept) in level.players {
             self.native_as_player(uuid, |g| {
                 g.inventory = kept.inventory;

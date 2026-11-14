@@ -14,11 +14,12 @@ use horizon_client::{
 use horizon_protocol::packets::play::{self, Clientbound as C};
 
 /// A guest's open trading screen.
+#[derive(Clone)]
 pub(super) struct GuestMerchant {
     pub(super) window: i32,
     state: i32,
     /// The payment slots and the result.
-    slots: [Option<ItemStack>; 3],
+    pub(super) slots: [Option<ItemStack>; 3],
     pub(super) merchant: Box<MerchantState>,
     /// The offers the client was last sent.
     sent: Vec<merchant::MerchantOffer>,
@@ -185,7 +186,7 @@ impl Game<'_> {
     /// The screen title: the custom name, else the profession (the client
     /// adds the level itself).
     /// `ServerPlayer.sendMerchantOffers`, when the offers changed.
-    fn lan_send_offers(&mut self, conn: u32, gm: &mut GuestMerchant, force: bool) {
+    pub(super) fn lan_send_offers(&mut self, conn: u32, gm: &mut GuestMerchant, force: bool) {
         let s = &gm.merchant.session;
         if !force && s.offers == gm.sent && s.level == gm.sent_level && s.xp == gm.sent_xp {
             return;
@@ -231,7 +232,7 @@ impl Game<'_> {
             gm.sent_xp = s.xp;
         }
     }
-    fn lan_send_merchant_content(&mut self, conn: u32, gm: &mut GuestMerchant) {
+    pub(super) fn lan_send_merchant_content(&mut self, conn: u32, gm: &mut GuestMerchant) {
         if let Some(host) = self.lan.as_mut() {
             let Some(gi) = host.hub.guests.iter().position(|g| g.conn == conn) else {
                 return;
@@ -387,7 +388,7 @@ impl Game<'_> {
                 g.carried = menu.carried.take();
             });
         }
-        self.register_exploration_maps(made);
+        self.merchant_maps(made);
         if !crafted_counts.is_empty() {
             self.as_guest(conn, |g| {
                 for (item, count) in crafted_counts {
@@ -429,8 +430,9 @@ impl Game<'_> {
             });
         }
         gm.merchant.session = session;
-        self.drop_guest_items(gi, dropped);
-        if refresh_offers || offers_refreshed {
+        self.merchant_drops(conn, dropped);
+        if refresh_offers || offers_refreshed || (self.merchant_take_active() && !traded.is_empty())
+        {
             self.lan_send_offers(conn, &mut gm, true);
         }
         self.lan_send_merchant_content(conn, &mut gm);
@@ -471,7 +473,7 @@ impl Game<'_> {
     }
 
     /// A container click on the guest's trading window.
-    pub(super) fn lan_merchant_click(&mut self, conn: u32, p: &play::ContainerClick) -> bool {
+    pub(super) fn lan_merchant_click_plain(&mut self, conn: u32, p: &play::ContainerClick) -> bool {
         let input = match p.input {
             0 => Input::Pickup,
             1 => Input::QuickMove,

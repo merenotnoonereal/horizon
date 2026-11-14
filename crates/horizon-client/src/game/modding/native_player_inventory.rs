@@ -8,6 +8,8 @@ use mod_api::{PlayerDataRefusal, PlayerRef};
 /// `Inventory`'s slot numbers past the 36 main slots (`EQUIPMENT_SLOT_MAPPING`).
 const SLOTS: u32 = 43;
 
+/// 0..35 main (0..8 hotbar), 36..39 feet to head, 40 offhand, 41 body, 42 saddle.
+/// ItemPlace uses 100..103 for armour and -106 for offhand; InventoryMenu has no 41/42.
 /// The slot the game keeps `Inventory` slot `slot` in.
 fn inventory_slot(slot: u32) -> Option<Slot> {
     Some(match slot {
@@ -88,7 +90,7 @@ impl Game<'_> {
         let ran = self.native_as_player_handle(player, |game| {
             set = game.slot_set(&target, stack.filter(|s| s.count > 0));
             if set && game.player.is_some() {
-                game.check_inventory_trigger();
+                game.after_commit(super::transactions::After::InventoryTrigger(player.uuid()));
             }
         });
         if ran && set {

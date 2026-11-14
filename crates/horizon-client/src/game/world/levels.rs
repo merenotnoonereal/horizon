@@ -226,7 +226,11 @@ impl Game<'_> {
             return self.locate_specialized_resident_owner(at);
         }
         if at.owner.dimension == self.dim.key() {
-            return self.locate_resident_owner(at);
+            // An open transaction's removal reads as gone already.
+            return self.locate_resident_owner(at).map(|mut source| {
+                source.value.1 &= !self.removal_pending(&source.value.0);
+                source
+            });
         }
         let dim = match at.owner.dimension {
             DimensionKey::OVERWORLD => Dim::Overworld,
@@ -235,6 +239,14 @@ impl Game<'_> {
             key => Dim::Extra(key),
         };
         self.levels.parked.get(&dim)?.locate_resident_owner(at)
+    }
+
+    /// Whether `target` counts as removed in the level in place: a mod removed it, or an open
+    /// transaction did and its root commit has not run the removal yet.
+    pub(in crate::game) fn target_removed(&self, target: &Target) -> bool {
+        self.persist.removals.contains(target)
+            || self.persist.destroying_vehicles.contains(target)
+            || self.removal_pending(target)
     }
 
     pub(super) fn resident_source_target_visible(
@@ -254,8 +266,7 @@ impl Game<'_> {
             return false;
         }
         if dimension == self.dim.key() {
-            return !self.persist.removals.contains(&target)
-                && !self.persist.destroying_vehicles.contains(&target);
+            return !self.target_removed(&target);
         }
         let dim = match dimension {
             DimensionKey::OVERWORLD => Dim::Overworld,
@@ -544,6 +555,17 @@ impl Levels {
         }
     }
 
+    pub(super) fn install_mob_map_snapshots(
+        &self,
+        snapshot: &Arc<horizon_client::neoforge_mob_maps::NeoForgeMobMaps>,
+    ) {
+        for level in self.parked.values() {
+            if let Some(terrain) = &level.locator {
+                terrain.set_mob_maps(snapshot);
+            }
+        }
+    }
+
     pub(super) fn parked_worlds(&self) -> impl Iterator<Item = &World> {
         self.parked.values().map(|level| &level.world)
     }
@@ -681,6 +703,9 @@ impl Game<'_> {
             generate.as_ref(),
         )?;
         save.install_profession_snapshot(self.stations().professions.clone());
+        if let Some(terrain) = &locator {
+            terrain.set_mob_maps(self.mob_map_snapshot());
+        }
         let mut world = Game::world_for_mods(self.res.facts().air, seed);
         world.attachments = save.load_attachments();
         world.shape = self.level_shapes.get(dim.id());
@@ -1074,6 +1099,7 @@ impl Game<'_> {
                 cart.id
             }
         };
+        self.journal_arrival(id);
         if self.uuid_admission_refused(self.persist.uuids.get(&id).copied()) {
             self.persist.off_level.insert(id, object);
             return;

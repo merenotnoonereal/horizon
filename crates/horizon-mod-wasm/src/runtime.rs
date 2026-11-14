@@ -3,9 +3,15 @@
 //! prepared release poison it, since the guest may still own retained state.
 //! The preallocated call path adds an Arc increment/decrement per call, without
 //! allocating on success. Diagnostic keys are built and checked only on refusal.
+#[cfg(all(test, feature = "test-copy-probe"))]
+#[path = "equip_scope_tests.rs"]
+mod equip_scope_tests;
 #[cfg(test)]
 #[path = "runtime_tests.rs"]
 mod runtime_tests;
+#[cfg(test)]
+#[path = "threads_tests.rs"]
+mod threads_tests;
 use crate::{
     Refusal,
     boundary::{Cx, Frame, serve},
@@ -149,8 +155,28 @@ impl State {
 /// Explicit engine settings; the remaining defaults are covered by Wasmtime compatibility.
 pub(crate) const ENGINE_CONFIG: (&str, bool) = ("epoch_interruption", true);
 
-pub(crate) fn engine() -> wasmtime::Result<Engine> {
+/// Wasm threads stay off: Wasmtime's `threads` feature is compiled in, which turns the proposal on
+/// by default, but no mod may define or import shared memory or run an atomic instruction. Pulley
+/// has no shared memory either way.
+pub(crate) const THREADS: [(&str, bool); 2] = [("wasm_threads", false), ("shared_memory", false)];
+
+/// Every engine that compiles or runs mod code, tests included, takes [`THREADS`] from here.
+pub(crate) fn without_threads(config: &mut wasmtime::Config) -> &mut wasmtime::Config {
+    config
+        .wasm_threads(THREADS[0].1)
+        .shared_memory(THREADS[1].1)
+}
+
+/// Wasmtime's other defaults with [`THREADS`]: for tests that need no epoch deadlines.
+#[cfg(test)]
+pub(crate) fn test_engine() -> Engine {
+    Engine::new(without_threads(&mut wasmtime::Config::new())).unwrap()
+}
+
+/// The settings of the engine mods run on, without its epoch ticker.
+pub(crate) fn engine_config() -> wasmtime::Config {
     let mut config = wasmtime::Config::new();
+    without_threads(&mut config);
     config.epoch_interruption(ENGINE_CONFIG.1);
     config.max_wasm_stack(horizon_guest_stack::GUEST_STACK_BYTES);
     // Wasmtime validates this bound even for synchronous engines. No async
@@ -158,6 +184,11 @@ pub(crate) fn engine() -> wasmtime::Result<Engine> {
     config.async_stack_size(
         horizon_guest_stack::GUEST_STACK_BYTES + horizon_guest_stack::HOST_HEADROOM,
     );
+    config
+}
+
+pub(crate) fn engine() -> wasmtime::Result<Engine> {
+    let config = engine_config();
     let engine = Engine::new(&config)?;
     let weak = engine.weak();
     std::thread::Builder::new()
@@ -372,6 +403,9 @@ pub(crate) struct WeakWasmMod {
     subscriptions: Arc<Mutex<std::collections::HashMap<(Id, u32), &'static [Option<HookId>]>>>,
 }
 impl WeakWasmMod {
+    pub(crate) fn equip_instance(&self) -> usize {
+        Arc::as_ptr(&self.prepared) as usize
+    }
     /// Whether the module's group has stopped or the module has been dropped.
     pub(crate) fn is_stopped(&self) -> bool {
         self.running
@@ -1047,7 +1081,10 @@ impl WasmMod {
         if store.data().replies.len() <= depth {
             store.data_mut().replies.resize_with(depth + 1, Writer::new);
             store.data_mut().inputs.resize_with(depth + 1, Writer::new);
-            store.data_mut().outputs.resize_with(depth + 1, Vec::new);
+            store
+                .data_mut()
+                .outputs
+                .resize_with(depth + 1, || Vec::with_capacity(64));
             store.data_mut().imports.resize_with(depth + 1, Vec::new);
         }
         store.data_mut().cx.frames.push(Frame::default());

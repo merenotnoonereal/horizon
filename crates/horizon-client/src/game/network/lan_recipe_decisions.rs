@@ -405,7 +405,8 @@ impl Game<'_> {
         match self.world.block_entities.get_mut(&pos) {
             Some(BlockEntity::Chest(items)) => *items = after,
             Some(BlockEntity::Mod(m)) => {
-                m.items.resize(m.items.len().max(after.len()), None);
+                let len = m.items.len().max(after.len());
+                m.items.resize(len, None);
                 for (slot, stack) in m.items.iter_mut().zip(after) {
                     *slot = stack;
                 }

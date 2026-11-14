@@ -87,8 +87,13 @@ impl Hooks for Book {
 struct Prepare;
 #[mod_api::__subscriptions]
 impl Hooks for Prepare {
-    fn prepare_item_craft(&self, host: &mut dyn ServerHost, _: &mut PrepareItemCraftEvent<'_>) {
+    fn prepare_item_craft(
+        &self,
+        host: &mut dyn ServerHost,
+        event: &mut PrepareItemCraftEvent<'_>,
+    ) -> Option<mod_api::ItemStack> {
         listen(host);
+        event.result.clone()
     }
 }
 struct Sources;

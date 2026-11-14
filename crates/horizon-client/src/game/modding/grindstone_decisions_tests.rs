@@ -75,7 +75,7 @@ impl Hooks for Mod {
             event.place.xp = 5;
         }
         if s.place_bad_xp {
-            event.place.xp = -1;
+            event.place.xp = -2;
         }
         if s.place_cancel {
             event.cancelled = true;

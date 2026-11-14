@@ -21,7 +21,7 @@ impl Game<'_> {
             game.give_acting_stack(stack, owner);
             // containerMenu.broadcastChanges: InventoryChangeTrigger.
             if game.player.is_some() {
-                game.check_inventory_trigger();
+                game.after_commit(super::transactions::After::InventoryTrigger(player.uuid()));
             }
         });
         if ran {

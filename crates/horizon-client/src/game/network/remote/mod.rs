@@ -68,7 +68,7 @@ use std::{
     sync::Arc,
     time::{Duration, Instant},
 };
-use winit::{event::MouseButton, keyboard::KeyCode};
+use winit::keyboard::KeyCode;
 use {
     horizon_core::nbt::Tag,
     horizon_mod_runtime::attachments::{Holder, ResidentAttachments},
@@ -527,6 +527,8 @@ pub(super) struct Remote {
             Arc<horizon_world::dimension_type::DimensionFacts>,
         ),
     >,
+    /// The levels this connection added to the process's table of levels: the only ones it drops.
+    added_levels: std::collections::HashSet<String>,
     /// `ClientPlayerNetworkEvent.LoggingOut` was fired for this connection: every way out
     /// of a world reports it once.
     logged_out: bool,
@@ -724,7 +726,7 @@ pub(super) struct Remote {
     /// Per-hand swing policy, restored when the current input attempt ends.
     pub(in crate::game) interaction_swing: [bool; 2],
     destroy_delay: u32,
-    input: horizon_client::interaction_input::InteractionInput,
+    pub(super) input: horizon_client::interaction_input::InteractionInput,
     /// Keys whose presses send a packet (swap hands, drop, a mount's
     /// inventory): like the click queue, they wait for the tick's
     /// `handleKeybinds` phase rather than going out between window events.
@@ -1140,6 +1142,7 @@ impl Game<'_> {
             level_facts: None,
             level_environment: None,
             facts_cache: Default::default(),
+            added_levels: Default::default(),
             viewed: Default::default(),
             hashed_seed: 0,
             chunk_format: Arc::new(ChunkFormat::new(
@@ -1382,6 +1385,7 @@ impl Game<'_> {
             level_facts: None,
             level_environment: None,
             facts_cache: Default::default(),
+            added_levels: Default::default(),
             viewed: Default::default(),
             hashed_seed: 0,
             chunk_format: Arc::new(ChunkFormat::new(
@@ -2595,15 +2599,8 @@ impl Game<'_> {
         // table may still hold a local world's (a superflat Overworld's).
         if let Ok(key) = horizon_core::LevelKey::parse(&spawn.dimension) {
             horizon_world::level::register_sea_level(key, spawn.sea_level);
-            if !matches!(
-                key,
-                horizon_core::LevelKey::OVERWORLD
-                    | horizon_core::LevelKey::NETHER
-                    | horizon_core::LevelKey::END
-            ) {
-                Dim::add_extra(&spawn.dimension);
-            }
         }
+        self.track_remote_levels(&spawn.dimension);
         // The replacement player starts with its inventory menu, even if the
         // server switched levels without closing the previous container.
         self.remote_close_local();
@@ -2939,7 +2936,7 @@ impl Game<'_> {
             p.state = state;
             return;
         }
-        self.set_block(pos, state);
+        self.set_block(pos, state, false);
     }
     /// BlockStatePredictionHandler.endPredictionsUpTo (ClientboundBlockChangedAckPacket): the
     /// actions up to `sequence` are settled, so the blocks they predicted take the state the
@@ -2962,7 +2959,7 @@ impl Game<'_> {
             if self.world.block(pos[0], pos[1], pos[2]).0 as i32 == prediction.state {
                 continue;
             }
-            self.set_block(pos, prediction.state);
+            self.set_block(pos, prediction.state, false);
             // ClientLevel.syncBlockState: the block that comes back may now hold
             // the player, and then it goes to the position the prediction
             // remembered.
@@ -3025,7 +3022,7 @@ impl Game<'_> {
         let z = at[2].clamp(-3.0e7, 3.0e7);
         player.position = Vec3::new(x, at[1], z);
     }
-    fn set_block(&mut self, pos: [i32; 3], state: i32) {
+    fn set_block(&mut self, pos: [i32; 3], state: i32, predicted: bool) {
         // A state we don't have (a server with mods we lack) reads as air, as in its chunks.
         let state = state.max(0) as u32;
         let known = horizon_client::chunk::known_block_state(state);
@@ -3035,7 +3032,7 @@ impl Game<'_> {
             && self.world.set(pos[0], pos[1], pos[2], state).is_ok()
         {
             self.sync_block_entity((pos[0], pos[1], pos[2]), Some(previous), state);
-            self.client_block_written(pos, previous, state);
+            self.client_block_written(pos, previous, state, predicted);
         }
         // A block we just placed: play its place sound (the server skips the placer).
         if let Some((target, _)) = self.remote.as_ref().and_then(|r| r.placing)
@@ -8541,7 +8538,7 @@ impl Game<'_> {
                         player_pos: here,
                     });
             }
-            self.set_block(pos, state.0 as i32);
+            self.set_block(pos, state.0 as i32, true);
         }
     }
 
@@ -9009,34 +9006,6 @@ impl Game<'_> {
         // applyAfterUseComponentSideEffects, then LivingEntityUseItemEvent.Finish.
         self.remote_use_item_finished(slot, &stack, &info);
     }
-    /// MouseHandler updates KeyMapping; handleKeybinds sends packets on a tick.
-    pub(super) fn remote_mouse(&mut self, button: MouseButton, pressed: bool) -> Result<()> {
-        use horizon_client::interaction_input::Button;
-        let input = match button {
-            MouseButton::Left => {
-                self.toggles
-                    .button(2, pressed, false, self.settings.toggle_attack);
-                self.left = self.toggles.is_down(2);
-                Some(Button::Attack)
-            }
-            MouseButton::Right => {
-                self.toggles
-                    .button(3, pressed, false, self.settings.toggle_use);
-                self.right = self.toggles.is_down(3);
-                Some(Button::Use)
-            }
-            MouseButton::Middle => Some(Button::Pick),
-            _ => None,
-        };
-        if pressed
-            && let Some(button) = input
-            && let Some(remote) = self.remote.as_mut()
-        {
-            remote.input.press(button);
-        }
-        Ok(())
-    }
-
     pub(super) fn request_remote_mining_stop(&mut self) {
         if let Some(r) = self.remote.as_mut() {
             r.stop_mining = true;
@@ -9074,6 +9043,7 @@ impl Game<'_> {
         input.tick(&mut RemoteInputWorld(self), attack, use_item);
         self.remote_queued_keys();
         if let Some(r) = self.remote.as_mut() {
+            input.merge_queued(std::mem::take(&mut r.input));
             r.input = input;
         }
     }
@@ -11157,6 +11127,10 @@ mod passage_cross_tests;
 #[cfg(test)]
 pub(crate) mod tests {
     use super::super::api_values::TryIntoApi;
+
+    mod predicted_block_notice_tests {
+        include!("predicted_block_notice_tests.rs");
+    }
 
     #[test]
     #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]

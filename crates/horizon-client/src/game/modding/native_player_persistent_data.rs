@@ -62,6 +62,7 @@ impl Game<'_> {
             return Err(PlayerDataRefusal::TooDeep);
         }
         let set = self.native_as_player_handle(player, |game| {
+            game.journal_player(player.uuid());
             set_persistent_data(&mut game.level.player_extra, data);
         });
         if set {

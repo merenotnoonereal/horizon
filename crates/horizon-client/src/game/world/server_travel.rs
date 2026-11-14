@@ -2277,3 +2277,7 @@ mod credits_respawn_tests {
 #[cfg(test)]
 #[path = "server_travel/hold_tests.rs"]
 mod hold_tests;
+
+#[cfg(test)]
+#[path = "server_travel/changed_dimension_tests.rs"]
+mod changed_dimension_tests;

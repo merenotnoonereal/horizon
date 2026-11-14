@@ -394,28 +394,29 @@ jobs:
       - name: Lint native targets
         if: ${{ !cancelled() && steps.setup.outcome == 'success' && (needs.changes.outputs.rust_required != 'false') }}
         id: native-lint
-        run: cargo clippy $JOBS --keep-going --workspace --all-targets -- -D warnings
+        run: python3 tools/ci/check_warnings.py cargo clippy $JOBS --keep-going --workspace --all-targets
       - name: Lint the server build without sound or controllers
         if: ${{ !cancelled() && steps.setup.outcome == 'success' && (needs.changes.outputs.rust_required != 'false') }}
         id: server-lint
-        run: cargo clippy $JOBS --keep-going -p horizon-client -p horizon-game -p horizon-mod-host --all-targets --no-default-features -- -D warnings
+        run: python3 tools/ci/check_warnings.py cargo clippy $JOBS --keep-going -p horizon-client -p horizon-game -p horizon-mod-host --all-targets --no-default-features
       - name: The mod API builds for wasm32
         id: the_mod_api_builds_for_wasm32
         if: ${{ !cancelled() && steps.setup.outcome == 'success' && (needs.changes.outputs.rust_required != 'false') }}
         run: cargo check $JOBS --keep-going -p horizon-mod-api --target wasm32-unknown-unknown --locked
-      # The prebuilt SDK's own feature graph: a release --lib build with prefer-dynamic and warnings denied, as
+      # The prebuilt SDK's own feature graph: a release --lib build with prefer-dynamic and warnings rejected, as
       # tools/prebuilt_game.py builds it, for the host and for the Windows archive (system-allocator there,
       # cargo_features). The checks above unify test and dev features (test-support) into one host build, which hid
       # an unused import (Linux) and a unix-only binding (Windows) from everything but the SDK builds on main. Its own
       # target folder: these flags would otherwise invalidate the workspace's artifacts for the other steps.
+      # --target leaves host units uncapped as before; stable Cargo has no host-rustflags, so their denies can stop dependents.
       - name: The prebuilt SDK's host library builds without warnings
         id: sdk_host
         if: ${{ !cancelled() && steps.setup.outcome == 'success' && needs.changes.outputs.rust_required != 'false' }}
         run: |
           started=$SECONDS
           host=$(rustc -vV | awk '/^host:/ {print $2}')
-          env -u CARGO_ENCODED_RUSTFLAGS RUSTFLAGS='-C prefer-dynamic -D warnings' \
-            cargo check $JOBS --keep-going --locked -p horizon-mod-host --lib --profile release --target-dir target/sdk-check --target "$host"
+          env -u CARGO_ENCODED_RUSTFLAGS RUSTFLAGS='-C prefer-dynamic' \
+            python3 tools/ci/check_warnings.py cargo check $JOBS --keep-going --locked -p horizon-mod-host --lib --profile release --target-dir target/sdk-check --target "$host"
           echo "SDK library check host: $((SECONDS - started)) s" | tee -a "$GITHUB_STEP_SUMMARY"
       - name: The prebuilt SDK's Windows library builds without warnings
         id: sdk_windows
@@ -435,8 +436,8 @@ jobs:
           # The real build is a dylib, which Cargo never LTOs; a --lib check under the release profile's thin LTO
           # builds the dependencies for linker-plugin LTO, which rustc refuses with prefer-dynamic on Windows.
           # A check generates no code, so LTO changes no warning or cfg it reports.
-          env -u CARGO_ENCODED_RUSTFLAGS RUSTFLAGS='-C prefer-dynamic -D warnings' \
-            cargo check $JOBS --keep-going --locked -p horizon-mod-host --lib --profile release --target-dir target/sdk-check \
+          env -u CARGO_ENCODED_RUSTFLAGS RUSTFLAGS='-C prefer-dynamic' \
+            python3 tools/ci/check_warnings.py cargo check $JOBS --keep-going --locked -p horizon-mod-host --lib --profile release --target-dir target/sdk-check \
               --target x86_64-pc-windows-gnu --features system-allocator --config profile.release.lto=false
           echo "SDK library check windows: $((SECONDS - started)) s" | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Report lint compiler cache
@@ -598,11 +599,26 @@ jobs:
         # Build the exact test graph on green. A workspace proc-macro can have different build/test
         # dependency profiles; cargo build first would make cargo test compile its consumers again.
         run: |
-          if cargo test $JOBS --profile test --workspace --lib --bins --tests --no-run --timings; then
+          build_log=$(mktemp)
+          trap 'rm -f "$build_log"' EXIT
+          if cargo test $JOBS --profile test --workspace --lib --bins --tests --no-run --timings 2>&1 | tee "$build_log"; then
             exit 0
           fi
+          # Keep the fast parallel build on green. A killed compile gets one retry of the
+          # same test graph, with finished units cached and no overlapping rustc processes.
+          if grep -Eq 'Compile terminated by signal [0-9]+|signal: [0-9]+, SIG[A-Z]+|terminated with signal [0-9]+' "$build_log"; then
+            failed_units=$(grep 'error: could not compile' "$build_log" | tr '\n' ';' || true)
+            echo "::warning::A compile was killed by a signal; retrying the test build with -j1. Failed units: $failed_units"
+            if cargo test -j1 --profile test --workspace --lib --bins --tests --no-run --timings; then
+              exit 0
+            fi
+          fi
           # Only red runs pay for the other graph, to collect independent targets' errors too.
-          cargo build $JOBS --keep-going --profile test --workspace --lib --bins --tests || true
+          echo "::error::The test build failed (its errors are above); building again with --keep-going to list every target's errors."
+          if cargo build $JOBS --keep-going --profile test --workspace --lib --bins --tests; then
+            # Main 9918e72ba0: two compiles killed by signal 9, then this build passed and the step ended with no message.
+            echo "::error::The --keep-going build passed, but it builds a different graph and does not clear the failed test build: check the errors above, including any 'signal 9' (a compile killed, usually for memory), before rerunning."
+          fi
           exit 1
       # What bounds the build: the slowest compile units, from the report --timings writes.
       - name: Slowest compile units
@@ -615,16 +631,15 @@ jobs:
             [ -f "$timing" ] || continue
             { echo "points build script phases:"; cat "$timing"; } | tee -a "$GITHUB_STEP_SUMMARY"
           done
-      # The binaries built above, three at a time: Cargo runs them one by one, and a few large ones (the API
-      # generator's, the client library's, no_wire_registration) took most of this step while the runner idled.
-      # Three, not more: the job's memory.peak counts the build and page cache, so it says nothing about this
-      # step; the runner prints each binary's max RSS and the largest five, which sizes any later change.
-      # Every binary still runs every test, from its package directory; any failure fails the step, and the
-      # step ends with the failing binaries and test names.
+      # Binaries run normally, three at a time, under the inet/resolver preload guard. Only a binary
+      # recording a violation is rerun per test to name culprits, even if they swallow the refusal.
+      # The guard library is built here only; the daily run does not preload it. Unix sockets remain available.
       - name: Test Rust core and voxel kernel correctness
         id: test_rust_core_and_voxel_kernel_correctness
         if: ${{ !cancelled() && steps.setup.outcome == 'success' && (needs.changes.outputs.rust_required != 'false') && steps.core_build.outcome == 'success' && steps.actor.outcome == 'success' }}
-        run: python3 tools/ci/run_test_binaries.py --jobs 3 --time-limits 2,5 -- cargo test $JOBS --profile test --workspace --lib --bins --tests
+        run: |
+          cc -shared -fPIC -O2 -Wall -Wextra -Werror tools/ci/network_guard.c -o target/network_guard.so
+          python3 tools/ci/run_test_binaries.py --jobs 3 --time-limits 2,5 --network-guard target/network_guard.so -- cargo test $JOBS --profile test --workspace --lib --bins --tests
       # Prepared-data content-root tests stay in the existing client-lib data leg.
       # Running them again here without the data only rebuilds targets before they return early.
       # One genuine pinned export also validates source staging and listed slots.
@@ -659,9 +674,9 @@ jobs:
       - name: Report the mod API surface change
         id: report_the_mod_api_surface_change
         # What this pull request changes in what mods can name, in the job summary: the head's horizon-stage exports
-        # the merge base and this tree, then classifies the diff (tools/ci/surface_report.py). A report, not a gate:
-        # it fails only when this tree cannot be exported, for a stale or unreadable new change note, or, with
-        # tools/ci/surface.toml's gate on, for a breaking change no note declares.
+        # the merge base and this tree, then classifies the diff (tools/ci/surface_report.py). It fails when this
+        # tree cannot be exported, for a stale or unreadable new change note, and, with tools/ci/surface.toml's
+        # gate on, for a breaking change no new note declares.
         if: ${{ !cancelled() && steps.setup.outcome == 'success' && (needs.changes.outputs.rust_required != 'false' && (github.event_name == 'pull_request' || inputs.pr != '')) && steps.stage.outcome == 'success' }}
         env:
           EVENT: ${{ github.event_name }}
@@ -975,7 +990,7 @@ jobs:
         working-directory: launcher
         env:
           JOBS: ${{ needs.changes.outputs.self_hosted == 'true' && '-j2' || '' }}
-        run: cargo clippy $JOBS --keep-going --all-targets --locked -- -D warnings
+        run: python3 ../tools/ci/check_warnings.py cargo clippy $JOBS --keep-going --all-targets --locked
       - name: Test launcher library and binaries
         id: test_launcher_library_and_binaries
         if: ${{ !cancelled() && steps.setup.outcome == 'success' }}

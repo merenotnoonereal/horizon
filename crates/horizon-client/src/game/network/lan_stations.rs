@@ -351,7 +351,7 @@ impl Game<'_> {
                                 &mut cancel,
                             );
                             if !cancel
-                                && (place.xp < 0
+                                && (place.xp < -1
                                     || place.output.as_ref().is_some_and(|s| s.count < 1))
                             {
                                 return Reply::Invalid(InvalidReason::Plan);

@@ -22,8 +22,7 @@ use horizon_protocol::{
     },
 };
 use mod_api::{
-    Hooks, ItemPlace, ItemResource, ModEntry, PlayerRecipeBookClickEvent, PrepareItemCraftEvent,
-    RecipeSourcesEvent, ServerHost,
+    Hooks, ItemPlace, ItemResource, ModEntry, PlayerRecipeBookClickEvent, RecipeSourcesEvent, ServerHost,
 };
 use std::{
     cell::Cell,
@@ -84,17 +83,13 @@ impl Hooks for Book {
         listen(host);
     }
 }
-struct Prepare;
+// prepare_item_craft only dispatches when the result is empty. The vanilla plate already
+// has a result, so observe mod placement through its unconditional source-collection hook.
+struct PlacementSources;
 #[mod_api::__subscriptions]
-impl Hooks for Prepare {
-    fn prepare_item_craft(
-        &self,
-        host: &mut dyn ServerHost,
-        _event: &mut PrepareItemCraftEvent<'_>,
-    ) -> Option<mod_api::ItemStack> {
+impl Hooks for PlacementSources {
+    fn recipe_sources(&self, host: &mut dyn ServerHost, _event: &mut RecipeSourcesEvent<'_>) {
         listen(host);
-        let key = mod_api::__private::item_key("minecraft:stone_pressure_plate").unwrap();
-        Some(mod_api::ItemStack::new(key, 1).unwrap())
     }
 }
 struct Sources;
@@ -373,7 +368,7 @@ fn book_placement_is_one_atomic_decision() {
 #[test]
 #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
 fn mod_placement_is_one_atomic_decision() {
-    exercise(Route::Mod, Box::new(Prepare));
+    exercise(Route::Mod, Box::new(PlacementSources));
 }
 
 #[test]

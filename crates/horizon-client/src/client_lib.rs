@@ -18,6 +18,8 @@ pub mod item_damage;
 pub mod parallel;
 pub mod powder_snow;
 #[cfg(test)]
+mod test_log;
+#[cfg(test)]
 mod test_resources;
 pub use horizon_client_render::{
     assets, atlas_sources, audio, auth, autotune, ban_notice, bidi, biome, block_edit,
@@ -69,6 +71,7 @@ pub mod debug_entries;
 pub mod debug_keys;
 pub mod debug_overlay;
 pub mod debugworld;
+pub mod desktop;
 pub mod dialog;
 pub mod dialog_screen;
 pub mod enchantment_levels;
@@ -110,6 +113,7 @@ pub mod locator_bar;
 pub mod lod_net;
 pub mod map_decoration_types;
 pub mod menu;
+pub mod menu_extra_net;
 pub mod merchant;
 pub mod mobs;
 pub mod mod_content;
@@ -181,6 +185,7 @@ pub mod title;
 pub mod toasts;
 pub mod ui_theme;
 pub mod vanillagen;
+pub mod viewed_levels_net;
 pub mod voxel_occlusion;
 // Keep the old path for native callers while giving the implementation a name
 // that does not collide with the gameplay adapter in `game/interface/entity_culling/mod.rs`.

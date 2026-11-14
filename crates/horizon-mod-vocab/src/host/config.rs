@@ -83,6 +83,40 @@ pub trait ConfigServerHost {
     #[access(WorldOnly)]
     fn tick_stats(&self) -> (f32, f64);
     /// Side: server.
+    /// The last 100 server ticks' durations in nanoseconds, as
+    /// `MinecraftServer.getTickTimesNanos` lays them out: the tick numbered `n` at index
+    /// `n % 100`, 0 where none was recorded yet. Sort a copy for percentiles; `tick_stats`
+    /// has the average.
+    #[access(WorldOnly)]
+    fn tick_times(&self) -> Vec<u64>;
+    /// Side: server.
+    /// The server's view distance in chunks (`PlayerList.getViewDistance`, `view-distance`):
+    /// how far players are sent chunks at most. None off a server open to players.
+    #[access(WorldOnly)]
+    fn server_view_distance(&self) -> Option<i32>;
+    /// Side: server.
+    /// The server's simulation distance in chunks (`PlayerList.getSimulationDistance`,
+    /// `simulation-distance`): how far around each player chunks tick. None off a server open
+    /// to players.
+    #[access(WorldOnly)]
+    fn server_simulation_distance(&self) -> Option<i32>;
+    /// Side: server.
+    /// Sets the server's view distance live, as `PlayerList.setViewDistance` (and the
+    /// management protocol's `serversettings/view_distance/set`) do: every player is sent
+    /// `ClientboundSetChunkCacheRadiusPacket` and their chunks follow, each up to what their
+    /// client asked for. `server.properties` is not written, so a restart goes back to it.
+    /// False for a distance outside 2 to 32, and off a dedicated server (an integrated
+    /// server follows its window's option).
+    #[access(WorldOnly)]
+    fn server_set_view_distance(&mut self, distance: i32) -> bool;
+    /// Side: server.
+    /// Sets the server's simulation distance live, as `PlayerList.setSimulationDistance`
+    /// does: every player is sent `ClientboundSetSimulationDistancePacket`, and the chunks
+    /// around the players tick to the new distance from the next tick. `server.properties`
+    /// is not written. False for a distance outside 2 to 32, and off a dedicated server.
+    #[access(WorldOnly)]
+    fn server_set_simulation_distance(&mut self, distance: i32) -> bool;
+    /// Side: server.
     /// Sets the server's tick rate, as `/tick rate` does (`ServerTickRateManager.setTickRate`):
     /// the game ticks `rate` times a second from the next tick on, an autosave wait already
     /// running is shortened when the new rate asks for less, and `server_tick_rate_changed`
@@ -101,6 +135,17 @@ pub trait ConfigServerHost {
     /// keeps world data in level attachments.
     #[access(WorldOnly)]
     fn world_dir(&self) -> Option<PathBuf>;
+    /// Side: server.
+    /// Every current rule in the one server-wide store, by namespaced id.
+    /// Readable from `server_about_to_start`, before any level exists.
+    /// Level game-rule reads use this same store once their level exists.
+    #[access(WorldOnly)]
+    fn game_rules(&self) -> Vec<(String, GameRuleValue)>;
+    /// Side: server.
+    /// Read the server-wide rule from the first server hook onward.
+    /// Returns `UnknownRule` for an unknown id; level reads use the same store.
+    #[access(WorldOnly)]
+    fn game_rule(&self, id: &str) -> Result<GameRuleValue, GameRuleReadError>;
     /// Side: server.
     /// The retained server reload listeners of the last successful reload.
     #[access(WorldOnly)]

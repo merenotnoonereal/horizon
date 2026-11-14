@@ -44,8 +44,10 @@
 # Reference
 
 - [The manifest and the package](reference/manifest.md)
+- [FML loader APIs and their Horizon routes](reference/fml-loader-apis.md)
 - [The registry index and `.hpack`](reference/registry-index.md)
 - [The mod API reference](reference/api.md)
+- [The mod SDK](reference/sdk.md)
 <!-- The hook-notes preprocessor supplies this chapter and its published URL from catalog notes. -->
 - [Hook notes]()
 <!-- The counterparts preprocessor renders the current declarations at the published URL. -->
@@ -53,3 +55,5 @@
 - [The process, versions and game tests](reference/process-environment.md)
 - [Maths and network NBT](reference/maths-and-network-nbt.md)
 - [Saved-world mod mismatches](reference/saved-world-mod-mismatch.md)
+
+- [Container loot](reference/container-loot.md)

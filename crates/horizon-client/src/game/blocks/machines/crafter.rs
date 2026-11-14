@@ -68,7 +68,7 @@ impl Game<'_> {
             // CrafterBlock.neighborChanged sets the flag with the state; a
             // loaded crafter keeps its saved flag until then.
             if c.state_triggered.is_some_and(|t| t != triggered) {
-                c.triggered = triggered;
+                c.triggered = i32::from(triggered);
             }
             c.state_triggered = Some(triggered);
             let remaining = c.crafting_ticks - 1;
@@ -257,10 +257,8 @@ impl Game<'_> {
         let Some(c) = self.container.and_then(|k| self.crafter_at(k)) else {
             return;
         };
-        let powered = self
-            .container
-            .map(|k| self.world.block(k.0, k.1, k.2))
-            .is_some_and(|state| self.containers().prop(state, "triggered") == Some("true"));
+        // CrafterScreen draws the arrow from `menu.isPowered()`: data slot 9, the int, is 1.
+        let powered = c.is_triggered();
         let draws =
             horizon_client::screen_layout::crafter(&horizon_client::screen_layout::CrafterView {
                 width: 176,
@@ -273,6 +271,7 @@ impl Game<'_> {
         // The background goes first, then the labels, then the slot decorations.
         let (background, rest) = draws.split_at(2.min(draws.len()));
         self.paint_screen(batch, ox, oy, background, true);
+        self.draw_screen_phase(batch, horizon_client::screen_draw::RenderPhase::Background);
         let atlas = &self.gui.atlas;
         let grey = rgba(64, 64, 64, 255);
         // A server's crafter menu has the title it was given.

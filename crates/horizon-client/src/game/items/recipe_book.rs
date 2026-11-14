@@ -675,6 +675,7 @@ impl Game<'_> {
                         &crate::game::native_hooks::HookedAttributeTooltips::new(self, None),
                         self.item_enchantments(),
                         &|k| self.pack.names.display_get(k),
+                        &|attribute| self.attribute_style(attribute, false),
                     )
                 })
             {
@@ -1276,16 +1277,6 @@ impl Game<'_> {
         else {
             return false;
         };
-        let button_craftable = self
-            .recipe_ui
-            .view
-            .buttons
-            .iter()
-            .flat_map(|b| b.entries.iter())
-            .any(|e| e.0 == entry_index && e.1);
-        if !button_craftable && self.recipe_ui.last_placed.as_deref() == Some(id.as_str()) {
-            return false;
-        }
         self.recipe_ui.last_placed = Some(id);
         self.recipe_ui.ghost.clear();
         self.place_book_recipe(book_type, entry_index, use_max);
@@ -1733,15 +1724,12 @@ impl Game<'_> {
 
     // ---- drawing ----
 
-    /// The book button, ghost recipe and the open book.
-    pub(super) fn draw_recipe_book(&mut self, batch: &mut HudBatch) {
+    /// The book button, ghost recipe and open book, returning its deferred tooltip.
+    pub(super) fn draw_recipe_book(&mut self, batch: &mut HudBatch) -> Option<Vec<(Text, u32)>> {
         if self.native_screen_shown() {
-            self.draw_mod_book(batch);
-            return;
+            return self.draw_mod_book(batch);
         }
-        let Some(book_type) = self.active_book() else {
-            return;
-        };
+        let book_type = self.active_book()?;
         self.ensure_book();
         if !self.shift_down_or_ctrl() {
             self.recipe_ui.time += self.frame_ticks;
@@ -1761,11 +1749,14 @@ impl Game<'_> {
             by,
         );
         self.draw_ghost(batch, book_type);
-        if self.book_open(book_type) {
+        let tooltip = if self.book_open(book_type) {
             self.refresh_book_view(book_type);
-            self.draw_book_panel(batch, book_type);
-        }
+            self.draw_book_panel(batch, book_type)
+        } else {
+            None
+        };
         self.narrate_recipe_book(batch, book_type, [bx, by, 20.0, 18.0]);
+        tooltip
     }
     /// `AbstractRecipeBookScreen`'s narratables: the book button (an
     /// `ImageButton` without a message) and the `RecipeBookComponent`, which
@@ -1909,7 +1900,11 @@ impl Game<'_> {
     }
     /// `RecipeBookComponent.extractRenderState` and `extractTooltip`, laid
     /// out by `horizon_client::recipe_book_screen`.
-    fn draw_book_panel(&mut self, batch: &mut HudBatch, book_type: BookType) {
+    fn draw_book_panel(
+        &mut self,
+        batch: &mut HudBatch,
+        book_type: BookType,
+    ) -> Option<Vec<(Text, u32)>> {
         let (xo, yo) = self.book_origin(batch);
         let cursor = self.cursor;
         let atlas = &self.gui.atlas;
@@ -2025,9 +2020,7 @@ impl Game<'_> {
         }
         self.recipe_ui.tab_anim.retain(|e| e.1 > 0.0);
         self.recipe_ui.button_anim.retain(|e| e.1 > 0.0);
-        if let Some(lines) = tooltip {
-            self.draw_tooltip_lines(batch, &lines, cursor.0, cursor.1);
-        }
+        tooltip
     }
     /// Paints recipe book calls; returns the first tooltip set (vanilla keeps
     /// the first one a frame asks for).

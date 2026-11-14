@@ -238,7 +238,7 @@ fn goal_name(m: &Mob, name: &str) -> String {
         "RestrictSun" => "RestrictSunGoal",
         "FleeSun" => "FleeSunGoal",
         // `Cat.CatAvoidEntityGoal`, `Fox.FoxAvoidEntityGoal`... name their subclass.
-        "AvoidEntity" if m.species() == Species::Cat => "CatAvoidEntityGoal",
+        "AvoidEntity" | "CatAvoid" if m.species() == Species::Cat => "CatAvoidEntityGoal",
         "AvoidEntity" => "AvoidEntityGoal",
         "BowAttack" => "RangedBowAttackGoal",
         "Swell" => "SwellGoal",
@@ -1253,6 +1253,7 @@ pub fn main() -> horizon_client::Result<()> {
                     asks_living_destroy_block: false,
                     asks_baby_spawn: false,
                     border: None,
+                    section_writer: None,
                 }
             };
         }

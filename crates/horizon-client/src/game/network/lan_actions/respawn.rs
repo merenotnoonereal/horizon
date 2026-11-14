@@ -25,6 +25,8 @@ impl Game<'_> {
         {
             attachments.replace_contents(copy);
         }
+        // NeoForge's clone keeps only the `PlayerPersisted` part of a mod's saved compound.
+        self.keep_only_player_persisted(conn);
         self.reinitialize_server_player(uuid, conn);
         // The new `ServerPlayer` is filed where it is placed, untold.
         self.entity_section_forget(entity_id as u32);
@@ -33,11 +35,10 @@ impl Game<'_> {
         // AbstractContainerScreen.tick / ServerPlayer.closeContainer: the dead
         // player's open container goes with it, so a chest's lid (its opener
         // count) falls instead of staying up for a player who is gone.
-        self.guest_container_closed(conn);
+        self.guest_close_menus_and_tell(conn);
         let Some(host) = self.lan.as_mut() else {
             return;
         };
-        host.hub.close_container(conn);
         // PlayerList.respawn builds a new `ServerPlayer`, whose `lastEquipmentItems` starts
         // empty: the mods hear each worn item again from empty (`native_players_equipment`).
         if let Some(play) = host.play.get_mut(&conn) {
@@ -311,26 +312,8 @@ impl Game<'_> {
         // The killing blow, for the death hooks.
         let blow = (dying && !mod_api::__private::mods().is_empty())
             .then(|| self.guest_damage_source(conn));
-        if let Some((damage_type, attacker)) = &blow {
-            // LivingDeathEvent: a canceled death keeps the player at 1 health.
-            let entity = host.hub.guests[gi].entity_id;
-            let mut cancel = false;
-            self.native_living_death(
-                entity as u32,
-                "minecraft:player",
-                damage_type,
-                *attacker,
-                &mut cancel,
-            );
-            if cancel {
-                if let Some(host) = self.lan.as_mut() {
-                    {
-                        let value = 1.0;
-                        host.hub.guests.update(gi, |guest| guest.health = value);
-                    }
-                }
-                return;
-            }
+        if dying && self.guest_death_canceled(gi, conn) {
+            return;
         }
         let Some(host) = self.lan.as_ref() else {
             return;
@@ -770,8 +753,8 @@ impl Game<'_> {
             })
     }
 
-    /// The killing blow of a guest as `LivingDeathEvent` names it: the
-    /// damage type and the causing entity's id (0 for none).
+    /// The scalar death-tail/death-message source. `living_death` uses the
+    /// full accepted hit retained on the body instead.
     pub(super) fn guest_damage_source(&self, conn: u32) -> (String, u32) {
         let (damage_type, attacker) = match self
             .lan

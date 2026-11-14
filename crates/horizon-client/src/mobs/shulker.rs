@@ -3,7 +3,7 @@
 //! their face is lost or when badly hurt, and shrugging off arrows while
 //! closed.
 use super::{
-    Damage, DamageKind, Mob, MobEvent, MobWorld, Species, Who,
+    Damage, Mob, MobEvent, MobWorld, Species, Who,
     anim::{Poses, State},
     control::LookKind,
     goals::{
@@ -390,13 +390,14 @@ fn teleport(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) -> bool {
             1.0,
             1.0,
         ));
-        super::living::teleports::snap_to(
+        super::living::teleports::snap_to_with(
             m,
             Vec3::new(
                 f64::from(t[0]) + 0.5,
                 f64::from(t[1]),
                 f64::from(t[2]) + 0.5,
             ),
+            w.section_writer.clone(),
         );
         // `level.gameEvent(GameEvent.TELEPORT, oldPos, Context.of(this))`:
         // the BlockPos overload uses `Vec3.atCenterOf(oldPos)`, between the
@@ -677,9 +678,9 @@ pub fn render_offset(m: &Mob, alpha: f32) -> glam::DVec3 {
         -f64::from(current[2] - old[2]) * scale,
     )
 }
-/// `Shulker.hurtServer` before the damage: arrows bounce off a closed shell.
-pub fn accepts(m: &Mob, source: &Damage) -> bool {
-    !(m.extra.counter == 0 && source.kind == DamageKind::Arrow)
+/// `Shulker.hurtServer`: direct AbstractArrow entities, including ThrownTrident, bounce off a closed shell.
+pub fn accepts(m: &Mob, source: &Damage, attack: &crate::health::Attack) -> bool {
+    !(m.extra.counter == 0 && attack.direct_is_arrow(source))
 }
 /// `Shulker.hurtServer` after the damage: below half health, a one in four
 /// chance to teleport away.
@@ -1281,8 +1282,13 @@ mod tests {
     #[test]
     fn a_closed_shell_refuses_an_arrow() {
         let mut fixture = crate::health::TestLevel::new(0);
-        let mut level = fixture.level();
-        let source = Damage::of(DamageKind::Arrow);
+        let attack = crate::health::Attack {
+            projectile: Some(2),
+            projectile_is_arrow: true,
+            ..Default::default()
+        };
+        let mut level = fixture.level().attacked_by(&attack);
+        let source = Damage::of(super::super::DamageKind::Arrow);
         let mut closed = shulker();
         closed.extra.counter = 0;
         let health = closed.health;

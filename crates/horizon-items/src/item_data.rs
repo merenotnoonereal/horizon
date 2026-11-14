@@ -1,6 +1,16 @@
 //! Item stack components beyond count and damage: enchantments, stored
 //! (book) enchantments, `repair_cost`, `custom_name`, `potion_contents` and
 //! `trim`, with their NBT form in vanilla's `components` compound.
+#[path = "item_data/brewing_fuel.rs"]
+pub mod brewing_fuel;
+#[path = "item_data/component_values.rs"]
+pub mod component_values;
+#[path = "item_data/cooking_fuel.rs"]
+pub mod cooking_fuel;
+#[path = "item_data/custom_model_data.rs"]
+pub mod custom_model_data;
+#[path = "item_data/ingredient_components.rs"]
+pub mod ingredient_components;
 use crate::items::{ItemInfo, ItemStack};
 use horizon_core::nbt::{JavaString, Tag};
 
@@ -41,8 +51,8 @@ pub fn modifier_rows(tag: &Tag) -> Vec<ModifierRow> {
         .iter()
         .filter_map(|e| {
             Some(ModifierRow {
-                attribute: text(e.get("type"))?,
-                id: text(e.get("id"))?,
+                attribute: horizon_world::datafix::dynamic::namespaced(&text(e.get("type"))?),
+                id: horizon_world::datafix::dynamic::namespaced(&text(e.get("id"))?),
                 amount: float(e.get("amount"))?,
                 operation: text(e.get("operation"))?,
                 slot: text(e.get("slot")).unwrap_or_else(|| "any".to_owned()),
@@ -301,8 +311,15 @@ impl StackData {
             "minecraft:trim" => {
                 self.trim = tag.as_ref().and_then(trim::from_nbt);
             }
-            // The stack's damage is outside its data; a name keeps its own reading.
-            "minecraft:damage" | "minecraft:custom_name" => self.set_other(id, tag),
+            // The scalar lives on ItemStack; retain explicit zero presence here
+            // so a non-durable prototype can carry its own durability.
+            "minecraft:damage" => {
+                self.explicit_zero_damage = tag.as_ref().is_some_and(|value| {
+                    horizon_world::datafix::dynamic::as_int(Some(value), 0) == 0
+                });
+                self.set_other(id, tag);
+            }
+            "minecraft:custom_name" => self.set_other(id, tag),
             _ if MODELLED.contains(&id) => {
                 let mut saved = match components_tag(0, Some(self)) {
                     Some(Tag::Compound(c)) => c,
@@ -462,6 +479,38 @@ pub fn component_bool(value: &Tag) -> Option<bool> {
     })
 }
 
+/// `FoodProperties.DIRECT_CODEC`: required numeric nutrition/saturation and an
+/// optional NbtOps boolean. Unknown fields are ignored; floats are unrestricted.
+/// Reads borrowed NBT into the existing copyable value without allocating.
+pub fn food_properties(
+    value: &Tag,
+) -> Result<horizon_world::food_properties::FoodProperties, &'static str> {
+    if !matches!(value, Tag::Compound(_)) {
+        return Err("food must be a map");
+    }
+    let nutrition = value
+        .get("nutrition")
+        .and_then(crate::properties::component_int)
+        .ok_or("nutrition must be a number")?;
+    if nutrition < 0 {
+        return Err("nutrition must be non-negative");
+    }
+    let saturation = value
+        .get("saturation")
+        .and_then(crate::properties::component_float)
+        .ok_or("saturation must be a number")?;
+    let can_always_eat = value
+        .get("can_always_eat")
+        .map(component_bool)
+        .unwrap_or(Some(false))
+        .ok_or("can_always_eat must be a number")?;
+    Ok(horizon_world::food_properties::FoodProperties {
+        nutrition,
+        saturation,
+        can_always_eat,
+    })
+}
+
 impl ItemStack {
     pub fn new(item: &str, count: u32) -> Self {
         Self {
@@ -470,6 +519,12 @@ impl ItemStack {
             damage: 0,
             extra: None,
         }
+    }
+    /// The stack `ItemStack.CODEC` reads from `tag` (`id`, `count`,
+    /// `components`), as `item_nbt::item_from_nbt` does; None for air or an
+    /// id that is no valid identifier. The id is not looked up in a registry.
+    pub fn from_nbt(tag: &horizon_core::nbt::Compound) -> Option<Self> {
+        crate::item_nbt::item_from_nbt(&Tag::Compound(tag.clone()))
     }
     pub fn data(&self) -> Option<&StackData> {
         self.extra.as_deref()
@@ -1074,10 +1129,16 @@ fn template_from(tag: &Tag) -> Option<ItemStack> {
         Tag::String(id) => Some(ItemStack::new(&id.to_string_lossy(), 1)),
         _ => {
             let id = tag.get("id").and_then(string)?;
+            // `ItemStackTemplate.CODEC`: `count` is `ExtraCodecs.intRange(1, 99)`, so a
+            // template outside it does not decode.
+            let count = tag.get("count").and_then(int).unwrap_or(1);
+            if !(1..=99).contains(&count) {
+                return None;
+            }
             let (damage, extra) = decode_components(tag.get("components"));
             Some(ItemStack {
                 item: Arc::from(id.as_str()),
-                count: tag.get("count").and_then(int).unwrap_or(1).max(1) as u32,
+                count: count as u32,
                 damage,
                 extra,
             })
@@ -1628,7 +1689,7 @@ pub fn decode_components(components: Option<&Tag>) -> (u32, Option<Box<StackData
             .get("minecraft:kinetic_weapon")
             .cloned()
             .map(crate::kinetic_weapon::KineticComponent::new),
-        map_id: c.get("minecraft:map_id").and_then(int).map(|v| v as i32),
+        map_id: seen.map_id.and_then(crate::properties::component_int),
         banner_patterns: crate::banner_layer::layers_from_nbt(c.get("minecraft:banner_patterns")),
         base_color: c
             .get("minecraft:base_color")
@@ -1655,7 +1716,9 @@ pub fn decode_components(components: Option<&Tag>) -> (u32, Option<Box<StackData
             })
             .filter(|(flight, explosions)| !(*flight == 1 && explosions.is_empty())),
         firework_explosion: seen.firework_explosion.map(explosion_from),
-        dyed_color: seen.dyed_color.and_then(int).map(|v| v as i32),
+        dyed_color: seen
+            .dyed_color
+            .and_then(horizon_core::color::rgb_color_from_tag),
         pot_decorations: seen
             .pot_decorations
             .map(|p| {
@@ -1712,7 +1775,11 @@ pub fn decode_components(components: Option<&Tag>) -> (u32, Option<Box<StackData
             && matches!(
                 seen.banner_patterns,
                 Some(Tag::List(layers)) if layers.len() == OMINOUS_LAYERS.len()),
-        ominous_amplifier: seen.amplifier.and_then(int).map(|v| v.clamp(0, 4) as u8),
+        ominous_amplifier: seen
+            .amplifier
+            .and_then(crate::properties::component_int)
+            .filter(|v| (0..=4).contains(v))
+            .map(|v| v as u8),
         trim: seen.trim.and_then(trim::from_nbt),
         bundle_selected: BundleSelected::default(),
         other: Vec::new(),
@@ -3013,8 +3080,7 @@ mod tests {
             firework_explosion: c.get("minecraft:firework_explosion").map(explosion_from),
             dyed_color: c
                 .get("minecraft:dyed_color")
-                .and_then(int)
-                .map(|v| v as i32),
+                .and_then(horizon_core::color::rgb_color_from_tag),
             pot_decorations: c
                 .get("minecraft:pot_decorations")
                 .map(|p| {
@@ -3542,5 +3608,24 @@ mod written_book_tests {
             ..book
         };
         assert_eq!(written_book_tag(&unresolved).get("resolved"), None);
+    }
+
+    /// `ItemStackTemplate.CODEC` reads `count` with `intRange(1, 99)`: outside it
+    /// the template is rejected, absent it is 1.
+    #[test]
+    fn a_template_count_outside_one_to_ninety_nine_is_rejected() {
+        let template = |count: Option<i32>| {
+            let mut fields = vec![("id", Tag::String("minecraft:stone".into()))];
+            if let Some(count) = count {
+                fields.push(("count", Tag::Int(count)));
+            }
+            template_from(&Tag::compound(fields)).map(|s| s.count)
+        };
+        assert_eq!(template(None), Some(1));
+        assert_eq!(template(Some(1)), Some(1));
+        assert_eq!(template(Some(99)), Some(99));
+        assert_eq!(template(Some(0)), None);
+        assert_eq!(template(Some(100)), None);
+        assert_eq!(template(Some(-1)), None);
     }
 }

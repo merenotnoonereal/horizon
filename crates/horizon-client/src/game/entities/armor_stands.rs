@@ -21,7 +21,7 @@ use horizon_core::{
     random::RandomSource,
 };
 use std::{collections::HashMap, sync::Arc};
-
+pub(super) const TYPE_ID: &str = "minecraft:armor_stand";
 /// Build the living-drops input at the loot-source boundary, before equipment pops.
 fn armor_stand_dying_drops<'a>(
     stand: &ArmorStand,
@@ -1086,6 +1086,7 @@ impl Game<'_> {
                     tops.push(pos)
                 });
             }
+            let section_step = (a.id, a.previous, a.position);
             for pos in tops {
                 self.bubble_column_particles(pos);
             }
@@ -1165,17 +1166,12 @@ impl Game<'_> {
             ) {
                 dead.push((i, damage_type));
             }
-        }
-        // A stand that breaks has its move this tick filed before it goes.
-        for &(i, _) in &dead {
-            let s = &self.armor_stands[i];
-            let (id, from, to) = (s.id, s.previous, s.position);
+            let (id, from, to) = section_step;
             self.entity_section_step(id, [from.x, from.y, from.z], [to.x, to.y, to.z]);
         }
         for (i, damage_type) in dead.into_iter().rev() {
             self.break_armor_stand_by_anything(i, damage_type, 0);
         }
-        self.entity_sections_stepped(super::entity_sections::Family::ArmorStands);
         Ok(())
     }
     /// A lid's `Entity.move` for armor stand `i`, one with physics (vanilla's
@@ -1378,7 +1374,15 @@ impl Game<'_> {
                 }
             },
         );
-        self.drop_death_items(&dying, stacks, 10, |_| None);
+        self.drop_death_items(
+            &dying,
+            stacks
+                .into_iter()
+                .map(|(stack, at)| (stack, at, 0))
+                .collect(),
+            10,
+            |_| None,
+        );
     }
     /// `ArmorStand.brokenByAnything`, then `kill`, as burning out or a blast
     /// breaks a stand: its equipment pops above its block, the stand item does
@@ -2911,6 +2915,7 @@ mod postbaseline_lodestone_controls {
         game.block_ticks
             .add_empty_chunk(BlockPos::new(64, 0, 64).chunk())
             .unwrap();
+        game.load_ticking_neighbourhood(0, 0);
         assert!(game.run_command("fill 64 199 64 79 199 79 stone"));
         assert!(game.run_command(&format!("summon armor_stand 65.5 200.0 65.5 {{UUID:[I;42321,0,0,102],Health:20f,NoGravity:1b,equipment:{{mainhand:{}}}}}",item("minecraft:compass",tracked,100,1))));
         let id = |n| {

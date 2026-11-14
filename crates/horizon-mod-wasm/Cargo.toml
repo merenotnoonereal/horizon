@@ -9,6 +9,7 @@ description = "The runtime for wasm mods: groups packages by their dependencies 
 [dependencies]
 horizon-guest-stack = { path = "../horizon-guest-stack" }
 horizon-core = { path = "../horizon-core" }
+horizon-java-properties = { path = "../horizon-java-properties" }
 horizon-mod-runtime = { path = "../horizon-mod-runtime" }
 mod_points = { package = "horizon-mod-points", path = "../horizon-mod-points" }
 mod_api = { package = "horizon-mod-api", path = "../horizon-mod-api" }
@@ -27,6 +28,7 @@ horizon-mod-api-gen = { path = "../horizon-mod-api-gen" }
 rustix = { version = "1", default-features = false, features = ["std", "process", "fs"] }
 
 [dev-dependencies]
+horizon-engine-slots = { path = "../horizon-engine-slots" }
 horizon-world = { path = "../horizon-world" }
 horizon-threads = { path = "../horizon-threads" }
 tempfile = "3.27.0"

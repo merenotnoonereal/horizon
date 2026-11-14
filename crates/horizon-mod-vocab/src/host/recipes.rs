@@ -30,8 +30,8 @@ pub trait RecipesHost {
     /// An ingredient from recipe-file JSON text: an item, a `#tag`, or a list
     /// of them, a bare id as `minecraft:` (as vanilla reads it); `test` says
     /// whether a stack fits. Items the game doesn't know are left out; None
-    /// when nothing is left (an unknown or empty tag, for one) and outside a
-    /// world.
+    /// for missing tags, invalid ingredients or no known named items, and
+    /// outside a world. An existing-empty tag returns an empty ingredient.
     /// Invalid JSON is refused with `RecipeJsonError::InvalidJson`.
     #[access(PublishedResources)]
     fn recipe_ingredient(&self, json: &str) -> Result<Option<Ingredient>, RecipeJsonError>;
@@ -70,6 +70,19 @@ pub trait RecipesClientHost {
     /// items and no recipe page take yours away.
     #[access(WorldOnly)]
     fn panel_items(&mut self, mod_id: &str, items: Vec<Stack>);
+    /// Side: client.
+    /// How mod `mod_id`'s item panel (`panel_items`) looks from now on:
+    /// `PanelStyle::RecipeBook` (the default: the recipe book's page arrows
+    /// and a plain search box), `PanelStyle::Viewer` (square page buttons on
+    /// a bar over the items and the viewer's search box, as Horizon's Recipes
+    /// panel draws them) or `PanelStyle::Classic` (JEI's list on Minecraft
+    /// 1.12: flush right under page buttons that always show and wrap around,
+    /// the search box at the foot of the screen with a settings button that
+    /// opens the mod's page in Options > Mods). The viewer's look changes
+    /// only the drawing; the classic one also lays the panel out. Kept for
+    /// the session, whether or not the panel is showing.
+    #[access(WorldOnly)]
+    fn panel_style(&mut self, mod_id: &str, style: PanelStyle);
     /// Side: client.
     /// Places a recipe in the open screen's grid as a click in the recipe
     /// book does (`ServerboundPlaceRecipePacket`): the inventory's grid or a

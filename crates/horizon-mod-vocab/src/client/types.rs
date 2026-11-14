@@ -635,6 +635,39 @@ pub enum SoundState {
     Stopped,
 }
 
+/// A file-backed standalone model baked on every resource load.
+// exhaustive: mods build every form with a struct literal and the game matches them without a wildcard
+#[derive(Clone, Debug, PartialEq, Eq, horizon_mod_api_macros::Wire)]
+pub enum StandaloneModelForm {
+    /// Bake one dependency with the blockstate baker's negative XYZ quarter-turns.
+    Rotated {
+        /// Namespaced identifier used to resolve the resulting `ModelRef`.
+        id: String,
+        /// Source model identifier, not the result identifier.
+        model: String,
+        /// Quarter-turn counts in X, Y, Z order, modulo four.
+        turns: [u8; 3],
+        /// Keep textures aligned to the resulting face's world basis.
+        uvlock: bool,
+    },
+    /// Bake all dependencies unturned and concatenate their quads into one model.
+    Combined {
+        /// Namespaced identifier used to resolve the resulting `ModelRef`.
+        id: String,
+        /// Source model identifiers, in quad concatenation order.
+        parts: Vec<String>,
+    },
+}
+
+impl StandaloneModelForm {
+    /// The resulting model's identifier.
+    pub fn id(&self) -> &str {
+        match self {
+            Self::Rotated { id, .. } | Self::Combined { id, .. } => id,
+        }
+    }
+}
+
 // no wire: dispatch result retains a static owning-mod identity; not an owned transport record.
 /// A replace hook's answer, or a collect hook's entry, with the mod that gave it: the dispatch
 /// fills in `mod_id` (the answering mod's `[mod] id`), so no mod can answer for another.
@@ -816,6 +849,33 @@ pub struct Stack {
     pub count: u32,
     /// The stack's data components, as the game's JSON form.
     pub components: String,
+}
+
+/// How a mod's item panel (`panel_items`) looks (`panel_style`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+#[derive(horizon_mod_api_macros::Wire)]
+pub enum PanelStyle {
+    /// The recipe book's page arrows and a plain search box (the default).
+    #[default]
+    RecipeBook,
+    /// A recipe viewer's: square page buttons on a bar over the items and
+    /// the viewer's search box, as Horizon's Recipes panel draws them.
+    Viewer,
+    /// JEI's look on Minecraft 1.12: the items flush with the screen's right
+    /// edge under a row of square page buttons that always shows (they wrap
+    /// around), the viewer's search box at the foot of the screen with a
+    /// settings button beside it that opens the mod's page in Options > Mods,
+    /// and a whole slot lit under the pointer.
+    Classic {
+        /// The search box under the window when there is room below it (JEI's
+        /// "center search bar"), else under the items.
+        centred_search: bool,
+        /// Lay the panel out beside a window at least this wide, centred on
+        /// the screen (a recipe screen the mod draws over the container);
+        /// 0 for the container's own.
+        window_width: u16,
+    },
 }
 
 /// What the player did on a native mod's panel (`panel_event`).

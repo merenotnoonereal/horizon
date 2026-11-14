@@ -54,6 +54,8 @@ pub struct ModInfo {
     pub issues: Option<String>,
     /// The PNG bytes of `icon.png`.
     pub icon: Option<std::sync::Arc<[u8]>>,
+    /// Loading warnings the mod gave as it registered: translation key and arguments.
+    pub warnings: Vec<(String, Vec<String>)>,
 }
 impl ModInfo {
     pub fn of(manifest: &crate::Manifest, icon: Option<&crate::icon::Icon>) -> Self {
@@ -67,6 +69,7 @@ impl ModInfo {
             homepage: manifest.homepage.clone(),
             issues: manifest.issues.clone(),
             icon: icon.map(|icon| icon.bytes().into()),
+            warnings: Vec::new(),
         }
     }
 }
@@ -371,6 +374,7 @@ impl ModList {
         if self.enabled.is_empty()
             && self.disabled.is_empty()
             && self.keys.is_empty()
+            && self.wasm_memory_cap_mib.is_none()
             && !path.exists()
         {
             return;
@@ -444,6 +448,14 @@ mod tests {
         ] {
             assert_eq!(ModList::parse(text).wasm_memory_cap(), 4096, "{text}");
         }
+        // A cap alone is still saved, in a folder with no list yet.
+        let dir = tempfile::tempdir().unwrap();
+        let only_cap = ModList {
+            wasm_memory_cap_mib: Some(64),
+            ..ModList::default()
+        };
+        only_cap.save(dir.path());
+        assert_eq!(ModList::load(dir.path()).wasm_memory_cap(), 64);
     }
 
     #[test]

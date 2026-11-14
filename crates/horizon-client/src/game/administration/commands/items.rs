@@ -590,22 +590,20 @@ impl Game<'_> {
             Slot::Guest(conn, slot) => self
                 .for_player(Target::Guest(*conn), |g| g.slot_set(slot, stack))
                 .unwrap_or(false),
-            Slot::Inv(i) => match self.inventory.get_mut(*i) {
-                Some(slot) => {
-                    *slot = stack;
-                    true
-                }
-                None => false,
-            },
+            Slot::Inv(i) if *i < self.inventory.len() => {
+                self.stop_use_replaced(*i, stack.as_ref());
+                self.inventory[*i] = stack;
+                true
+            }
+            Slot::Inv(_) => false,
             // LivingEntity's equipment SlotAccess: setItemSlot, so onEquipItem.
-            Slot::MainHand => match self.inventory.get_mut(self.selected) {
-                Some(slot) => {
-                    let old = std::mem::replace(slot, stack.clone());
-                    self.player_on_equip("mainhand", old.as_ref(), stack.as_ref());
-                    true
-                }
-                None => false,
-            },
+            Slot::MainHand if self.selected < self.inventory.len() => {
+                self.stop_use_replaced(self.selected, stack.as_ref());
+                let old = std::mem::replace(&mut self.inventory[self.selected], stack.clone());
+                self.player_on_equip("mainhand", old.as_ref(), stack.as_ref());
+                true
+            }
+            Slot::MainHand => false,
             Slot::Armor(i) => match self.armor.get_mut(*i) {
                 Some(slot) => {
                     let old = std::mem::replace(slot, stack.clone());
@@ -617,6 +615,7 @@ impl Game<'_> {
                 None => false,
             },
             Slot::Offhand => {
+                self.stop_use_replaced(crate::game::shield::OFFHAND_SLOT, stack.as_ref());
                 let old = std::mem::replace(&mut self.offhand, stack.clone());
                 self.player_on_equip("offhand", old.as_ref(), stack.as_ref());
                 true
@@ -635,7 +634,16 @@ impl Game<'_> {
             }
             Slot::Ender(i) => match self.ender_items.get_mut(*i) {
                 Some(slot) => {
-                    *slot = stack;
+                    *slot = stack.clone();
+                    // An open ender chest menu shows a copy, which closing copies back
+                    // over `ender_items`: the write goes into the copy as well.
+                    if let Some(key) = self.ender_open
+                        && let Some(BlockEntity::Chest(items)) =
+                            self.world.block_entities.get_mut(&key)
+                        && let Some(open) = items.get_mut(*i)
+                    {
+                        *open = stack;
+                    }
                     true
                 }
                 None => false,
@@ -1946,9 +1954,7 @@ mod mob_equipment_command_tests {
             let stack = game.reload_datapacks(false, &features).unwrap();
             assert!(game.fns.store.functions.contains_key("wpenchant:ready"));
             let root = game.options.resources.clone();
-            let prepared = game
-                .prepare_world_reload(&stack, &root, game.mods.data_switched)
-                .unwrap();
+            let prepared = game.prepare_world_reload(&stack, &root).unwrap();
             game.install_world_tables(prepared);
             game.run_native_advancement_grants();
             let raw_present = game

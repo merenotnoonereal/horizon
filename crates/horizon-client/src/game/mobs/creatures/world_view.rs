@@ -7,6 +7,7 @@ impl Game<'_> {
         let weather = self.can_have_weather();
         let player = self.player_view();
         MobWorld {
+            section_writer: None,
             professions: self.stations().professions.as_ref(),
             loop_context: &self.loop_context,
             foreign: None,
@@ -73,14 +74,15 @@ impl Game<'_> {
                 None
             },
             mob_hooks: (self.native_authoritative()
-                && [
+                && ([
                     mod_api::HookId::EndermanAnger,
                     mod_api::HookId::EntityMobGriefing,
                     mod_api::HookId::LivingVisibility,
                     mod_api::HookId::LivingChangeTarget,
                 ]
                 .into_iter()
-                .any(mod_api::__private::listened))
+                .any(mod_api::__private::listened)
+                    || mod_api::__private::has_scoped_hook(mod_api::HookId::CanEntityDestroy)))
             .then_some(self as &dyn horizon_client::mobs::MobHooks),
             goal_host: (self.native_authoritative()
                 && (mod_api::__private::has_entity_parts()

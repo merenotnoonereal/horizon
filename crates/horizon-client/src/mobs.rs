@@ -1,10 +1,8 @@
-//! Mobs: entity types (dimensions and default attributes exported from
-//! vanilla), models (vanilla `LayerDefinitions` baked part trees) and the
-//! `Mob` entity with vanilla's AI framework: goal and target selectors with
-//! priorities and control flags (`goals`), A* pathfinding with walk, swim,
-//! fly and amphibious node evaluators (`path`, `nav`), move/look/jump/body
-//! controls (`control`), `LivingEntity` physics (`living`) and per-species
-//! behaviour, models, animations and sounds.
+//! Mobs: entity types (dimensions and default attributes exported from vanilla), models (vanilla
+//! `LayerDefinitions` baked part trees) and the `Mob` entity with vanilla's AI framework: goal and
+//! target selectors with priorities and control flags (`goals`), A* pathfinding with walk, swim,
+//! fly and amphibious node evaluators (`path`, `nav`), move/look/jump/body controls (`control`),
+//! `LivingEntity` physics (`living`) and per-species behaviour, models, animations and sounds.
 pub mod ai;
 pub mod allay;
 pub mod ambient;
@@ -30,6 +28,7 @@ pub mod copper_golem;
 pub mod creaking;
 pub mod creaking_heart;
 pub mod cube;
+pub mod dab;
 pub mod data;
 pub mod dolphin;
 pub mod doors;
@@ -58,11 +57,14 @@ pub mod landing;
 pub mod leash;
 pub mod living;
 pub mod llama;
+mod mob_slot;
 pub mod mod_behaviors;
 pub mod model_layers;
 pub mod monster_brain;
 pub mod nautilus;
 pub mod neutral_anger;
+pub use mob_slot::MobSlot;
+mod push;
 mod type_attributes;
 pub use neutral_anger::{
     adopt_anger_end, anger_left, persistent_anger, resume_anger, settle_anger_end,
@@ -204,6 +206,8 @@ mod powder_snow_move_tests;
 
 #[derive(Clone, Debug)]
 pub struct MobType {
+    /// Resolved content renderer shadow; vanilla uses its normal table.
+    pub shadow: Option<(f32, f32)>,
     pub id: String,
     pub species: Species,
     pub width: f64,
@@ -274,18 +278,6 @@ impl MobType {
 
     pub fn layer(&self, key: &str) -> Option<&Arc<Part>> {
         self.layers.get(key)
-    }
-
-    /// The vanilla entity type whose class this type's mobs are: the type
-    /// itself, or the template a content mod's living type copies. What a
-    /// class saves and syncs of its own (`Zombie.addAdditionalSaveData`, its
-    /// entity data) follows it; the saved and sent id stays [`Self::id`].
-    pub fn class_id(&self) -> &str {
-        if self.id.starts_with("minecraft:") {
-            &self.id
-        } else {
-            species::vanilla_id(self.species)
-        }
     }
 }
 /// Each type's default attribute values, parsed exactly (serde_json's
@@ -503,6 +495,7 @@ impl MobTypes {
             out.insert(
                 id.clone(),
                 MobType {
+                    shadow: crate::shadows::content_shadow(t),
                     species: def.species,
                     item_stack_limits: item_stack_limits.clone(),
                     attribute_bounds,
@@ -1479,6 +1472,8 @@ pub struct Mob {
     /// `Entity.needsSync`: knocked back, pushed or jumped since its server
     /// last sent it, so the next update goes out at once.
     pub needs_sync: bool,
+    /// The mobs it pushed this turn, kept while the collision cap is on (`push::Cap`).
+    pub pushed: Vec<u32>,
     /// `Entity.syncPosition`: it bounced this tick (`restituteMovementAfterCollisions`),
     /// so its tracker keeps this position as a step of the next move it sends.
     pub sync_position: bool,
@@ -1535,6 +1530,10 @@ pub struct Mob {
     /// `Entity.firstTick`: no splash for a mob that appears in water.
     pub first_tick: bool,
     pub no_gravity: bool,
+    /// `Entity.noPhysics`: its moves pass through blocks. No save writes it
+    /// (`Entity.saveWithoutId` omits it) and no mob tick rewrites it except a
+    /// vex, which sets it only for the length of its own tick.
+    pub no_physics: bool,
     /// `Entity.mainSupportingBlockPos`: the block it stood on after its last
     /// move.
     pub supporting: Option<[i32; 3]>,
@@ -1573,8 +1572,8 @@ pub struct Mob {
     /// `Stats.DAMAGE_DEALT_ABSORBED` to the player whose turn it is (see [`Mob::soak_hit`]).
     pub dealt_absorbed: i32,
     pub last_damage: Option<(Damage, i64)>,
-    /// Whether the most recent projectile damage call committed its source.
-    pub projectile_damage_committed: bool,
+    pub accepted_hit: Option<std::sync::Arc<crate::health::AcceptedHit>>,
+    pub death_canceled: bool,
     /// `DamageSource.getDirectEntity` of `last_damage` when [`Damage`] cannot name it (a
     /// thrown potion, an area effect cloud): its entity type.
     pub last_direct: Option<&'static str>,
@@ -1616,11 +1615,6 @@ pub struct Mob {
     /// What `entity_size` answered for its pose and vanilla size (`EntityEvent.Size`):
     /// `dims` uses it while it holds.
     pub size_answer: Option<crate::pose::SizeAnswer>,
-}
-impl crate::entity_rules::EntityRules for Mob {
-    fn is_no_gravity(&self) -> bool {
-        self.no_gravity
-    }
 }
 /// A mannequin's `description` and `hide_description` (`Mannequin.updateDescription`):
 /// the default `entity.minecraft.mannequin.label`, none at all, or a component.
@@ -1693,11 +1687,11 @@ pub enum MobEvent {
         mob: u32,
         at: [f64; 3],
     },
-    /// `LivingEntity.baseTick`'s drowning damage: entity event 67, the
-    /// clients' `makeDrownParticles`.
+    /// `LivingEntity.baseTick`'s drowning: entity event 67 for 8 `bubbles`, else that many particles.
     Drown {
         mob: u32,
         at: [f64; 3],
+        bubbles: i32,
     },
     /// PowderSnowBlock.entityInside's snowflake with vanilla's sampled velocity.
     PowderSnowParticle {
@@ -1820,7 +1814,7 @@ pub enum MobEvent {
     ArmorHurt {
         mob: u32,
         amount: f32,
-        kind: DamageKind,
+        source: crate::health::HurtSource<'static>,
     },
     /// `LivingEntity.updateFallFlying`: every 20 glide ticks the glider in
     /// `slot` (the one `Util.getRandom` picked) takes one point of wear,
@@ -2725,6 +2719,8 @@ pub struct Seen {
     pub still: bool,
     /// `Entity.isVehicle`: something rides it.
     pub carrying: bool,
+    /// Pushes given or taken so far this tick, while the collision cap is on.
+    pub collisions: u32,
 }
 impl Seen {
     /// Whether `canBeCollidedWith` can ever hold for this kind: the slots
@@ -2931,6 +2927,7 @@ impl Mob {
             is_vehicle: equine::is_vehicle(m),
             still: m.species() == Species::HappyGhast && happy_ghast::on_still_timeout(m),
             carrying: m.rider.is_some() || m.extra.rider.is_some(),
+            collisions: 0,
             knockback_resistance: m.attrs.knockback_resistance,
             effects: m
                 .extra
@@ -3185,6 +3182,7 @@ pub fn apply_brain_events(
                     direct: None,
                     held: [held, None],
                     player_uuid: None,
+                    ..Default::default()
                 };
                 let (aim, fish_pos, fish_silent) = fish
                     .map(|m| {
@@ -3327,7 +3325,6 @@ pub trait LiveMobs {
     /// Visit each mob in the disjoint loan, without allocating a snapshot.
     fn for_each(&self, visitor: &mut dyn FnMut(&Mob));
 }
-
 #[derive(Clone)]
 pub struct MobWorld<'a> {
     pub professions: &'a villager::ResolvedProfessions,
@@ -3441,6 +3438,7 @@ pub struct MobWorld<'a> {
     /// The level's world border, whose walls stop a mob's moves
     /// (`Entity.collectColliders`); None: nothing stops them there.
     pub border: Option<&'a horizon_core::geometry::border::BorderGeometry>,
+    pub section_writer: Option<living::section_writes::Observer>,
 }
 /// `MobEffectInstance.tickServer` for a content mod's effect: its
 /// `shouldApplyEffectTickThisTick` and `applyEffectTick`, which the game's
@@ -3459,36 +3457,8 @@ pub trait ModEffectTicks {
     /// effect stays at no ticks and asks again next tick.
     fn effect_expired(&self, mob: u32, effect: usize, amplifier: i32, cancel: &mut bool);
 }
-/// Native mod hooks the mob AI asks while it decides.
-pub trait MobHooks {
-    /// `EnderManAngerEvent`: whether a mod keeps enderman `enderman` calm
-    /// though `player` stares at it.
-    fn enderman_anger_suppressed(&self, enderman: u32, player: &PlayerView) -> bool;
-    /// `EntityMobGriefingEvent`: whether mob `mob` may grief, `rule` (the
-    /// `mob_griefing` game rule) unless a mod says otherwise.
-    fn can_grief(&self, mob: u32, rule: bool) -> bool;
-    /// Whether `can_grief` may differ from the rule (a mod listens), so a
-    /// scan that griefing off would skip still has to run.
-    fn grief_hooked(&self) -> bool;
-    /// `LivingVisibilityEvent`: `visibility`, the player's visibility
-    /// percent as mob `looking` targets it, as mods scale it.
-    fn living_visibility(&self, player: &PlayerView, looking: u32, visibility: f64) -> f64;
-    /// `LivingVisibilityEvent` for a mob target `target`: its visibility
-    /// percent as mob `looking` targets it, as mods scale it.
-    fn living_visibility_mob(&self, _target: u32, _looking: u32, visibility: f64) -> f64 {
-        visibility
-    }
-    /// A proposed target change. A listener may cancel or substitute a target.
-    fn living_change_target(
-        &self,
-        _mob: &mut Mob,
-        _world: &MobWorld<'_>,
-        _is_brain: bool,
-        target: Option<Who>,
-    ) -> TargetChange {
-        TargetChange::Set(target)
-    }
-}
+mod mob_hooks;
+pub use mob_hooks::MobHooks;
 /// Outcome of a target-change event.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TargetChange {
@@ -3746,6 +3716,7 @@ impl Mob {
             horizontal_collision: false,
             vertical_collision_below: false,
             needs_sync: false,
+            pushed: Vec::new(),
             sync_position: false,
             gear_knockback_resistance: None,
             hurt_time: 0,
@@ -3773,6 +3744,7 @@ impl Mob {
             was_eye_in_water: false,
             first_tick: true,
             no_gravity: false,
+            no_physics: false,
             supporting: None,
             standing_on: None,
             no_ai: false,
@@ -3791,7 +3763,8 @@ impl Mob {
             absorption: 0.0,
             dealt_absorbed: 0,
             last_damage: None,
-            projectile_damage_committed: false,
+            accepted_hit: None,
+            death_canceled: false,
             last_direct: None,
             combat: combat::Tracker::default(),
             removed: false,
@@ -4078,7 +4051,7 @@ impl Mob {
             return false;
         }
         if !self.attacker_allows_damage(&source)
-            || !ai::accepts_damage(self, &source, amount, level.attack().player_uuid)
+            || !ai::accepts_damage(self, &source, amount, level.attack())
         {
             return false;
         }
@@ -4293,10 +4266,7 @@ impl Mob {
         if !absorbed && dealt != 0.0 {
             self.record_damage(source, dealt);
         }
-        if through != 0.0 {
-            container.record_health_damage(through);
-            level.damage_post(crate::health::Hurting::Mob(self, &source), &container);
-        }
+        container.record_health_damage(through);
         // LivingEntity.hurtArmor: `Horse` is the only mob that overrides it, and
         // it hands `doHurtEquipment` the body slot alone. A wolf's armour has
         // its own rule (`Wolf.actuallyHurt`, `hurt_wolf_armor`) and a player's
@@ -4309,7 +4279,7 @@ impl Mob {
             self.outbox.push(MobEvent::ArmorHurt {
                 mob: self.id,
                 amount: damage,
-                kind: source.kind,
+                source: crate::health::mob_source(&source, level.attack()),
             });
         }
         // Animal.actuallyHurt: damage taken ends love mode (`resetLove`).
@@ -4321,9 +4291,6 @@ impl Mob {
         let success = blocked <= 0.0 || amount > 0.0;
         if success {
             self.last_damage = Some((source, i64::from(self.age)));
-            if self.projectile_motion.is_some() {
-                self.projectile_damage_committed = true;
-            }
         }
         self.last_direct = None;
         if let Some(who) = source.attacker {
@@ -4353,6 +4320,7 @@ impl Mob {
             // `death_protection` item in either hand instead of dying.
             self.use_death_protection(level, &source);
         }
+        self.remember_accepted_hit(level, &source, success);
         if knock {
             // playHurtSound (Mob: also resets the ambient sound clock) or the
             // death sound: makeSound draws the voice pitch whenever there is a sound.
@@ -4407,6 +4375,8 @@ impl Mob {
                 self.outbox.push(MobEvent::Infested { at, velocities });
             }
         }
+        // The last of `LivingEntity.hurtServer`: `LivingDamageEvent.Post`, health taken or not.
+        level.damage_post(crate::health::Hurting::Mob(self, &source), &container);
         // Shulker.hurtServer: the low-health teleport roll after `super.hurtServer`.
         if success && self.species() == Species::Shulker {
             shulker::after_hurt(self);
@@ -4998,9 +4968,10 @@ impl Mob {
             self.position.z,
         ]
     }
+    /// `Entity.playSound(event, 1.0, 1.0)`: at the feet, and nothing while silent.
     pub fn sound(&self, event: &'static str, events: &mut Vec<MobEvent>) {
-        let at = [self.position.x, self.eye_y(), self.position.z];
-        events.push(MobEvent::Sound(event, at, 1.0, 1.0));
+        let at = [self.position.x, self.position.y, self.position.z];
+        events.extend((!self.silent).then_some(MobEvent::Sound(event, at, 1.0, 1.0)));
     }
     /// `Mob.getAmbientSoundInterval`; `HappyGhast` waits six times as long
     /// while it carries a passenger.
@@ -5039,9 +5010,8 @@ impl Mob {
     }
     /// Mob.playSound with LivingEntity.getVoicePitch.
     pub fn voice(&mut self, event: &'static str, events: &mut Vec<MobEvent>) {
-        // Java evaluates the arguments of `playSound(event, getSoundVolume(),
-        // getVoicePitch())` before the call, so the pitch is drawn even for a
-        // silent entity, whose `Entity.playSound` then plays nothing.
+        // Java draws the pitch before `Entity.playSound` looks at isSilent, so a
+        // silent entity draws it and then plays nothing.
         let pitch = self.voice_pitch();
         if self.silent {
             return;
@@ -5437,6 +5407,7 @@ pub(crate) mod sensor_scan_tests {
 
     pub(crate) fn kind() -> Arc<MobType> {
         Arc::new(MobType {
+            shadow: None,
             id: "minecraft:cow".into(),
             species: Species::Cow,
             width: 0.9,

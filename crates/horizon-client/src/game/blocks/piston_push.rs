@@ -395,9 +395,12 @@ impl Game<'_> {
                 return;
             }
             let no_physics = match target {
-                MoveWho::Entity(handle) => {
-                    with_entity!(self, handle, entity => entity.no_physics())
-                }
+                MoveWho::Entity(handle) => with_entity!(self, handle, entity => {
+                    // The four kinds whose struct keeps no `noPhysics` field (a
+                    // shulker bullet among them) hold a mod's write here.
+                    let stored = self.persist.no_physics.get(&entity.id()).copied();
+                    entity.no_physics(stored)
+                }),
                 _ => false,
             };
             if self.lid_spares(lid, root, target, no_physics) {
@@ -1744,6 +1747,7 @@ mod h255_mob_piston_ground_tests {
                 }
             }
             game.player = Some(PlayerMotion::new(game.motion, Vec3::new(2.5, 200.0, 2.5)).unwrap());
+            game.load_ticking_neighbourhood(0, 0);
             game.creative = true;
             assert!(game.run_command("fill 0 199 0 31 199 31 stone"));
             game.world.random.set_seed(255);

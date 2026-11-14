@@ -4,12 +4,12 @@
 //! start the supervisor writes them into `server.properties`, which the game reads exactly as vanilla's
 //! server does; what the game changes there itself (`/whitelist on`) is copied back afterwards.
 
+use horizon_platform::java_properties::{Properties, date_string, now_millis};
 use horizon_platform::server_files::biome_regions::BiomeRegions;
 #[cfg(test)]
 use horizon_platform::server_files::biome_regions::MissingRegions;
-use horizon_platform::server_files::{
-    java_properties::{Properties, date_string, now_millis},
-    properties::{DIFFICULTIES, GAME_MODES, ServerProperties, SystemEntropy},
+use horizon_platform::server_files::properties::{
+    DIFFICULTIES, GAME_MODES, ServerProperties, SystemEntropy,
 };
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, path::Path};
@@ -32,6 +32,10 @@ enforce_whitelist = false    # kick online players taken off the whitelist
 view_distance = 10           # chunks sent around each player
 simulation_distance = 10     # chunks around each player where mobs, crops and redstone tick
 max_view_distance = 0        # past view_distance, saved chunks only, up to this (never generated; 0: off)
+max_viewed_loaded_chunks = 2048             # chunks a mod may keep loaded for one player in another level (0: none; at most 2048 for now)
+max_viewed_ticking_chunks = 441             # of them, ticking (one player's simulation area at distance 10)
+max_viewed_loaded_chunks_per_level = 16384  # the same for all players together, per level
+max_viewed_ticking_chunks_per_level = 3528  # ticking, all players together, per level
 admin_feedback_to_ops = true # operators see each other's commands ([name: ...], vanilla); false: only the log
 accept_older_clients = false # true: 26.2 clients join too, their packets translated (docs/hosting.md)
 
@@ -117,10 +121,18 @@ enabled = true               # false pauses it and keeps the webhook
 # [biome_regions]
 # missing = "vanilla"        # generate vanilla's biomes where the missing mods' regions were; "refuse": don't start
 # adopt_installed = true     # new chunks use the installed mods' regions (the world keeps its saved weights)
+# Villagers that cannot move (a trading hall's cells, or riding) skip their brain, which cuts the lag of big halls;
+# they keep trading and restocking (docs/server.md). Not vanilla, so off. Mobs push every mob they overlap, as
+# vanilla does; a crowded pen costs the square of its crowd, and max_collisions caps it (the most other mobs one
+# mob pushes per tick, pushes it receives counted; 0 = no cap, vanilla). To turn them on:
+# [entities]
+# villager_lobotomize = true
+# villager_lobotomize_check_interval = 100   # ticks between rechecks of whether a villager can move
+# max_collisions = 8
 "##;
 
 /// Each typed setting: its section, its name, and the vanilla key it writes.
-pub const TYPED: [(&str, &str, &str); 17] = [
+pub const TYPED: [(&str, &str, &str); 21] = [
     ("server", "motd", "motd"),
     ("server", "port", "server-port"),
     ("server", "bind", "server-ip"),
@@ -131,6 +143,26 @@ pub const TYPED: [(&str, &str, &str); 17] = [
     ("server", "view_distance", "view-distance"),
     ("server", "simulation_distance", "simulation-distance"),
     ("server", "max_view_distance", "horizon-max-view-distance"),
+    (
+        "server",
+        "max_viewed_loaded_chunks",
+        "horizon-max-viewed-loaded-chunks",
+    ),
+    (
+        "server",
+        "max_viewed_ticking_chunks",
+        "horizon-max-viewed-ticking-chunks",
+    ),
+    (
+        "server",
+        "max_viewed_loaded_chunks_per_level",
+        "horizon-max-viewed-loaded-chunks-per-level",
+    ),
+    (
+        "server",
+        "max_viewed_ticking_chunks_per_level",
+        "horizon-max-viewed-ticking-chunks-per-level",
+    ),
     (
         "server",
         "admin_feedback_to_ops",
@@ -189,6 +221,57 @@ pub struct Config {
     /// isn't the default.
     #[serde(default, skip_serializing_if = "BiomeRegions::is_default")]
     pub biome_regions: BiomeRegions,
+    /// `[entities]` (docs/server.md): mob settings passed to the game; written only when it isn't the default.
+    #[serde(default, skip_serializing_if = "Entities::is_default")]
+    pub entities: Entities,
+}
+
+/// `[entities]`: `villager_lobotomize = true` skips the brain of villagers that cannot move (stuck in a cell,
+/// riding something), rechecked every `villager_lobotomize_check_interval` ticks. The game reads it from the
+/// same file (game/dedicated.rs, `load_entities`).
+/// `[entities]`: `dab = true` runs a mob's AI less often the farther it is from the nearest player (Pufferfish's
+/// dynamic activation of brain; crates/horizon-client/src/mobs/dab.rs). Off by default: it is not vanilla's
+/// behaviour. A mob farther than `dab_start_distance` blocks runs its AI every
+/// `clamp(distance² >> dab_activation_dist_mod, 1, dab_max_tick_freq)` ticks. `max_collisions = N` limits how many
+/// other mobs one mob pushes in a tick (pushes it receives count too); 0 is vanilla's behaviour, no cap.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Entities {
+    pub villager_lobotomize: bool,
+    pub villager_lobotomize_check_interval: u32,
+    pub dab: bool,
+    pub dab_start_distance: u32,
+    pub dab_max_tick_freq: u32,
+    pub dab_activation_dist_mod: u32,
+    pub max_collisions: u32,
+}
+impl Default for Entities {
+    fn default() -> Self {
+        Self {
+            villager_lobotomize: false,
+            // Must match `mobs::villager::lobotomy::DEFAULT_INTERVAL` in horizon-client (this crate cannot depend on it).
+            villager_lobotomize_check_interval: 100,
+            dab: false,
+            dab_start_distance: 12,
+            dab_max_tick_freq: 20,
+            dab_activation_dist_mod: 8,
+            max_collisions: 0,
+        }
+    }
+}
+impl Entities {
+    fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+    fn check(&self) -> Result<(), String> {
+        if self.dab_max_tick_freq == 0 {
+            return Err("entities.dab_max_tick_freq must be at least 1".into());
+        }
+        if self.dab_activation_dist_mod > 30 {
+            return Err("entities.dab_activation_dist_mod must be 30 or less".into());
+        }
+        Ok(())
+    }
 }
 
 /// `[combat]`: `legacy = true` resolves the players' melee hits by 1.8.9's rules (no attack cooldown or sweep,
@@ -276,6 +359,13 @@ pub struct Server {
     pub simulation_distance: u32,
     /// Horizon's far ring (docs/hosting.md): saved chunks sent past `view_distance`, up to this; 0 is off.
     pub max_view_distance: u32,
+    /// Viewed levels (docs/hosting.md): the chunks mods may keep loaded for one player in one other
+    /// level (fixed at 2048 for this protocol revision: the game lowers a higher value), the ticking
+    /// ones among them, and the same for all players together in one level.
+    pub max_viewed_loaded_chunks: u32,
+    pub max_viewed_ticking_chunks: u32,
+    pub max_viewed_loaded_chunks_per_level: u32,
+    pub max_viewed_ticking_chunks_per_level: u32,
     /// Whether operators get each other's command feedback (`[name: ...]`, vanilla's broadcastToAdmins);
     /// false leaves it to the console's log, so nobody in game sees an operator's commands.
     pub admin_feedback_to_ops: bool,
@@ -539,6 +629,10 @@ impl Default for Server {
             view_distance: 10,
             simulation_distance: 10,
             max_view_distance: 0,
+            max_viewed_loaded_chunks: 2048,
+            max_viewed_ticking_chunks: 441,
+            max_viewed_loaded_chunks_per_level: 2048 * 8,
+            max_viewed_ticking_chunks_per_level: 441 * 8,
             admin_feedback_to_ops: true,
             accept_older_clients: false,
         }
@@ -603,7 +697,7 @@ impl Config {
         Self::parse(&text).map_err(|e| format!("{}: {e}", path.display()))
     }
 
-    fn check(&self) -> Result<(), String> {
+    pub(crate) fn check(&self) -> Result<(), String> {
         let w = &self.world;
         if !GAME_MODES.contains(&w.game_mode.as_str()) {
             return Err(format!(
@@ -636,10 +730,14 @@ impl Config {
         self.panel.address()?;
         self.api.check()?;
         self.transfer.check()?;
+        if self.entities.villager_lobotomize_check_interval == 0 {
+            return Err("entities.villager_lobotomize_check_interval must be above zero".into());
+        }
         self.discord.check()?;
         self.anticheat.check()?;
         self.chat_filter.check()?;
         self.prune_chunks.check()?;
+        self.entities.check()?;
         if self.server.port == 0 {
             return Err("server.port must be a port number from 1 to 65535".into());
         }
@@ -686,6 +784,18 @@ impl Config {
         );
         replace(&path, &text)?;
         Ok(written)
+    }
+
+    /// The level `op` gives a new operator: `op-permission-level` as the game reads it at its next start,
+    /// that is `server.properties` with this configuration's keys written over it (as
+    /// [`Config::write_properties`] does). 4, vanilla's default, when the keys cannot be read.
+    pub fn op_permission_level(&self, dir: &Path) -> i32 {
+        let mut properties = read_properties(&dir.join(PROPERTIES)).unwrap_or_default();
+        for (key, value) in self.vanilla() {
+            properties.put(&key, value);
+        }
+        ServerProperties::new(properties, &mut SystemEntropy::default())
+            .map_or(4, |p| p.op_permission_level)
     }
 
     /// A configuration from a vanilla `server.properties`: typed settings from their keys, and every other
@@ -766,6 +876,7 @@ pub fn render(config: &Config) -> String {
         "prune_chunks",
         "combat",
         "biome_regions",
+        "entities",
     ] {
         if let Some(settings) = table.get(section) {
             let mut only = toml::Table::new();
@@ -1043,6 +1154,35 @@ mod tests {
     }
 
     #[test]
+    fn the_collision_cap_is_off_unless_its_section_sets_it() {
+        assert_eq!(Config::default().entities.max_collisions, 0);
+        assert!(!TEMPLATE.lines().any(|l| l.trim() == "[entities]"));
+        let on = Config::parse(&format!("{TEMPLATE}\n[entities]\nmax_collisions = 8\n")).unwrap();
+        assert_eq!(on.entities.max_collisions, 8);
+        assert_eq!(Config::parse(&render(&on)).unwrap(), on);
+        let off = render(&Config::default());
+        assert!(!off.lines().any(|l| l.trim() == "[entities]"), "{off}");
+        assert!(Config::parse("[entities]\nmax_collisions = -1\n").is_err());
+        assert!(Config::parse("[entities]\nmax_collision = 8\n").is_err());
+    }
+
+    #[test]
+    fn dab_is_off_unless_its_section_turns_it_on() {
+        assert!(!Config::default().entities.dab);
+        let off = render(&Config::default());
+        assert!(!off.lines().any(|l| l.trim() == "[entities]"), "{off}");
+        let on = Config::parse("[entities]\ndab = true\ndab_max_tick_freq = 10\n").unwrap();
+        assert!(on.entities.dab);
+        assert_eq!(on.entities.dab_start_distance, 12);
+        assert_eq!(on.entities.dab_activation_dist_mod, 8);
+        // Kept when the file is written again.
+        assert_eq!(Config::parse(&render(&on)).unwrap(), on);
+        assert!(Config::parse("[entities]\ndab_max_tick_freq = 0\n").is_err());
+        assert!(Config::parse("[entities]\ndab_activation_dist_mod = 99\n").is_err());
+        assert!(Config::parse("[entities]\ndap = true\n").is_err());
+    }
+
+    #[test]
     fn legacy_combat_is_off_unless_its_section_turns_it_on() {
         assert!(!Config::default().combat.legacy);
         assert!(!TEMPLATE.lines().any(|l| l.trim() == "[combat]"));
@@ -1077,17 +1217,43 @@ mod tests {
     }
 
     #[test]
+    fn villager_lobotomize_is_off_unless_its_section_turns_it_on() {
+        let off = Config::default().entities;
+        assert!(!off.villager_lobotomize);
+        assert_eq!(off.villager_lobotomize_check_interval, 100);
+        assert!(!TEMPLATE.lines().any(|l| l.trim() == "[entities]"));
+        let on = Config::parse(&format!(
+            "{TEMPLATE}\n[entities]\nvillager_lobotomize = true\nvillager_lobotomize_check_interval = 40\n"
+        ))
+        .unwrap();
+        assert!(on.entities.villager_lobotomize);
+        assert_eq!(on.entities.villager_lobotomize_check_interval, 40);
+        // Kept when the file is written again, and left out while off.
+        assert_eq!(Config::parse(&render(&on)).unwrap(), on);
+        let text = render(&Config::default());
+        assert!(!text.lines().any(|l| l.trim() == "[entities]"), "{text}");
+        assert!(Config::parse("[entities]\nvillager_lobotomize = 1\n").is_err());
+        assert!(Config::parse("[entities]\nvillager_lobotomise = true\n").is_err());
+        assert!(Config::parse("[entities]\nvillager_lobotomize_check_interval = 0\n").is_err());
+    }
+
+    #[test]
     fn defaults_are_vanilla() {
         // Every typed default is what vanilla 26.3 writes for a missing key.
         let vanilla =
             ServerProperties::new(Properties::default(), &mut SystemEntropy::default()).unwrap();
         for (key, value) in Config::default().vanilla() {
             // Horizon's own, which vanilla doesn't have: their defaults behave as vanilla does
-            // (the far ring off, operators told of each other's commands, other releases turned away).
+            // (the far ring off, operators told of each other's commands, other releases turned away,
+            // and caps on viewed areas, which only a mod asks for).
             if key.starts_with("horizon-") {
                 let vanilla_like = match key.as_str() {
                     "horizon-admin-feedback-to-ops" => "true",
                     "horizon-accept-older-clients" => "false",
+                    "horizon-max-viewed-loaded-chunks" => "2048",
+                    "horizon-max-viewed-ticking-chunks" => "441",
+                    "horizon-max-viewed-loaded-chunks-per-level" => "16384",
+                    "horizon-max-viewed-ticking-chunks-per-level" => "3528",
                     _ => "0",
                 };
                 assert_eq!(value, vanilla_like, "{key}");

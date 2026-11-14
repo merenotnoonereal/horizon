@@ -79,6 +79,16 @@ pub struct Parts {
     /// Block capability providers by capability name, then by block, in registration order:
     /// those asked of a block whatever block entity it has, or none.
     pub(crate) block_capabilities: Capabilities<BlockProviderOf>,
+    /// Canonical block capability metadata, retained independently of provider availability.
+    pub(crate) block_capability_metadata: HashMap<&'static str, (Arc<str>, Option<bool>)>,
+    /// Built-in declaration order followed by the order mods first mention a capability.
+    pub(crate) block_capability_order: Vec<&'static str>,
+    /// Explicit domains and declarations of the game's default providers.
+    pub(crate) default_block_containers: HashMap<Box<str>, Vec<(usize, crate::ModContainer)>>,
+    pub(crate) default_block_fluids: HashMap<Box<str>, Vec<(usize, crate::ModFluidTanks)>>,
+    pub(crate) default_block_energy: HashMap<Box<str>, Vec<(usize, crate::ModEnergyBuffer)>>,
+    pub(crate) default_item_containers:
+        HashMap<Box<str>, Vec<(usize, Arc<dyn crate::ItemContainerProvider>)>>,
     /// Item capability providers by capability name, then by item, in registration order.
     pub(crate) item_capabilities: Capabilities<ItemProviderOf>,
     /// Entity capability providers by capability name, then by entity type, in registration
@@ -92,6 +102,8 @@ pub struct Parts {
     pub(crate) crash_sections: Vec<CrashSectionPart>,
     /// Command argument types the mods registered, by namespaced id, in registration order.
     pub(crate) command_arguments: Vec<CommandArgumentInfo>,
+    /// Entity selector tokens the mods registered, by name, in registration order.
+    pub(crate) entity_selectors: Vec<EntitySelectorInfo>,
     /// Frozen raw payload declarations and their sole receiving owners.
     pub(crate) payloads: Option<Arc<crate::parts::payloads::Payloads>>,
     /// Only the parts that override each scoped hook, resolved at load or reload.

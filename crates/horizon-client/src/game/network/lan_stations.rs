@@ -123,6 +123,7 @@ impl Game<'_> {
             });
         }
         self.lan_send_station(conn);
+        self.player_menu_opening(conn);
         true
     }
 
@@ -453,6 +454,7 @@ impl Game<'_> {
             });
         }
         self.lan_send_lectern(conn, true);
+        self.player_menu_opening(conn);
     }
 
     /// The lectern's book and page for the client: everything (`all`), or
@@ -1021,6 +1023,7 @@ impl Game<'_> {
                 }
             }
             if window.is_some() {
+                self.player_menu_closing(conn);
                 return true;
             }
         }
@@ -1059,6 +1062,9 @@ impl Game<'_> {
         }
         if !back.is_empty() {
             self.lan_place_back(gi, back);
+        }
+        if window.is_some() {
+            self.player_menu_closing(conn);
         }
         true
     }

@@ -724,7 +724,7 @@ impl PackScreen {
             return action;
         }
         if self.search.contains(x, y) {
-            self.search.click(m, x, false);
+            self.search.click(m, x, false, false);
             self.set_focus(Focus::Search);
             return Action::None;
         }
@@ -1184,7 +1184,7 @@ impl PackScreen {
             if d::inside(point, qx, qy, BROWSER_SEARCH_W, 18) {
                 self.browser_search.x = qx;
                 self.browser_search.y = qy;
-                self.browser_search.click(m, x, false);
+                self.browser_search.click(m, x, false, false);
                 self.browser_focus = true;
                 return Some(Action::None);
             }
@@ -2144,6 +2144,7 @@ mod click_sound_tests {
     }
 
     #[test]
+    #[ignore = "daily"]
     fn the_browsers_search_button_submits_what_was_typed() {
         let atlas = crate::hud::HudAtlas::build(
             &horizon_assets::resource_source::ResourceSource::directory(

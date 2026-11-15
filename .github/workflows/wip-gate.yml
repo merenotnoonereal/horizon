@@ -1,0 +1,49 @@
+# Injected only into gate/* commits on merenotnoonereal/horizon (never in a PR branch): the pre-push gate's steps
+# 1-5 on GitHub's runner (scratch/gh-gate.sh). aidan-51 runs only step 6, the #[ignore]d data tests.
+name: wip-gate
+on:
+  push:
+    branches: ['gate/**']
+concurrency:
+  group: ${{ github.ref }}
+  cancel-in-progress: true
+permissions:
+  contents: read
+env:
+  HORIZON_TELEMETRY_URL: "off"
+  CARGO_INCREMENTAL: 0
+  CARGO_TERM_COLOR: never
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    steps:
+      - name: Free disk space
+        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL /usr/local/share/boost && df -h /
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Take out the injected files
+        run: |
+          mkdir -p /tmp/gate && cp .wip-gate.sh .wip-known.txt .wip-checks /tmp/gate/
+          rm -f .wip-gate.sh .wip-known.txt .wip-checks .github/workflows/wip-gate.yml
+          # Commit the cleaned tree: repository hygiene reads tracked files, and pr_ready wants a clean worktree.
+          git add -A && git -c user.name=gate -c user.email=gate@users.noreply.github.com commit -q -m 'gate: drop injected files'
+      - name: Packages
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends pkg-config libasound2-dev libudev-dev libxkbcommon-x11-dev libwayland-dev libx11-xcb-dev libfontconfig-dev libvulkan-dev xz-utils
+      - name: Rust
+        run: rustup toolchain install stable --profile minimal --component rustfmt --component clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: gate
+          cache-on-failure: true
+      - name: Gate steps 1-5
+        run: bash /tmp/gate/.wip-gate.sh "$(head -n 1 /tmp/gate/.wip-checks)" /tmp/gate/.wip-known.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: gate
+          path: |
+            gate-summary.txt
+            gate-logs/
